@@ -1,6 +1,6 @@
 # Conversation recall hallucination audit
 
-Audited 15 November 2026 against the current working tree and the supplied screenshot. This is an audit and proposed fix; application behavior has not been changed. The working tree already contained extensive uncommitted changes, which were preserved.
+Audited 15 November 2026 against the working tree and the supplied screenshot. The findings below describe the pre-implementation snapshot. The subsequent [implementation and validation](MEMORY_RECALL.md) now address the history-answer path. The working tree already contained extensive uncommitted changes, which were preserved.
 
 The screenshot demonstrates a confident recollection, followed by an unsupported reversal after a public web search. It does not establish whether the original Neon request was present in the database or what context the model received. No production conversation records, credentials, or live model requests were used in this audit. The findings below were reproduced with an isolated in-memory PGlite database and a scripted fake model where specified.
 

@@ -1,9 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { createTestDatabase, createTestStore } from "../../test/database";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { dateFrom, type Clock } from "../clock";
-import { createStore, type Store } from "./index";
+import type { Store } from "./index";
 import { migrate } from "./migrate";
 import { claims, memory, threads, turns } from "./schema";
 
@@ -12,11 +11,11 @@ const clock = (): Clock => ({
   instant, tz: "Asia/Kolkata", iso: instant.toISOString(), human: "Sunday 15 November 2026",
 });
 
-describe("store on PGlite", () => {
+describe("store on Postgres", () => {
   let store: Store;
 
   beforeAll(async () => {
-    store = await createStore({ dataDir: ":memory:", clock });
+    store = await createTestStore({ clock });
   }, 30_000);
 
   beforeEach(async () => {
@@ -32,13 +31,13 @@ describe("store on PGlite", () => {
   }
 
   it("creates the tables on first open and applies its migration only once", async () => {
-    expect(store.driver).toBe("pglite");
+    expect(store.driver).toBe("postgres");
     const saved = await save("alice", "CRM shortlist");
     await migrate(store.db);
     await migrate(store.db);
 
     const applied = await store.db.execute<{ version: number }>(sql`SELECT version FROM web_agent_migrations`);
-    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     expect(await store.turnsInRange("alice", instant, dateFrom("2026-11-16T00:00:00Z"))).toEqual([saved]);
   });
 
@@ -47,6 +46,19 @@ describe("store on PGlite", () => {
     expect(saved.ts).toEqual(instant);
     expect(saved.tz).toBe("Asia/Kolkata");
     expect(saved.id).toBeTypeOf("number");
+  });
+
+  it("upgrades an existing transcript store without rewriting its messages", async () => {
+    const original = await save("alice", "Check Neon pricing");
+    // Reproduce the existing version-2 schema in this isolated test database.
+    await store.db.execute(sql`DROP TABLE recall_references`);
+    await store.db.execute(sql`DELETE FROM web_agent_migrations WHERE version >= 3`);
+    await migrate(store.db);
+    await migrate(store.db);
+    expect(await store.historySources("alice", [original.id], { ts: dateFrom(instant.getTime() + 1), id: 999 })).toEqual([original]);
+    const request = await save("alice", "Did I ask for Neon pricing?", dateFrom(instant.getTime() + 1));
+    await store.saveTurn({ userId: "alice", sessionId: "session-1", role: "assistant", content: "Yes", ts: dateFrom(instant.getTime() + 2), recall: { userTurnId: request.id, sourceTurnIds: [original.id] } });
+    expect((await store.previousRecall("alice", "session-1", { ts: dateFrom(instant.getTime() + 3), id: 999 }))?.sourceTurnIds).toEqual([original.id]);
   });
 
   it("returns both roles across sessions with an inclusive start and exclusive end", async () => {
@@ -145,27 +157,18 @@ describe("store on PGlite", () => {
   });
 });
 
-it("persists the fallback database across close and reopen", async () => {
-  const dataRoot = resolve("data");
-  // mkdtemp requires its parent; ordinary startup creates data/pglite itself.
-  const { mkdir } = await import("node:fs/promises");
-  await mkdir(dataRoot, { recursive: true });
-  const dataDir = await mkdtemp(`${dataRoot}${sep}store-test-`);
+it("persists Postgres data across pool close and reopen", async () => {
+  const database = await createTestDatabase();
   let store: Store | undefined;
   try {
-    store = await createStore({ databaseUrl: " ", dataDir, clock });
+    store = await database.open({ clock });
     const saved = await store.saveTurn({ userId: "alice", sessionId: "one", role: "user", content: "Persistent CRM shortlist" });
     const assistant = await store.saveTurn({ userId: "alice", sessionId: "one", role: "assistant", content: "Pending extraction", curation: {
       userTurnId: saved.id, evidence: [{ title: "Pricing", url: "https://example.com/pricing", snippet: "$20/mo", published_date: null, is_official: false }],
     } });
     await store.close();
-    store = undefined;
-    store = await createStore({ dataDir, clock });
+    store = await database.open({ clock });
     expect((await store.searchTurns("alice", "shortlist", instant))[0].id).toBe(saved.id);
     expect((await store.pendingCurations("alice"))[0]).toMatchObject({ assistant: { id: assistant.id }, evidence: [{ snippet: "$20/mo" }] });
-  } finally {
-    await store?.close();
-    if (!dataDir.startsWith(`${dataRoot}${sep}store-test-`)) throw new Error("Unsafe test cleanup path");
-    await rm(dataDir, { recursive: true, force: true });
-  }
+  } finally { await database.close(); }
 }, 30_000);

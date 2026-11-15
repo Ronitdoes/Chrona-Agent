@@ -1,13 +1,14 @@
+import { createTestStore } from "../../test/database";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { createStore, type Store } from "./index";
+import type { Store } from "./index";
 import { claims, memory, threads } from "./schema";
 import { clock } from "../../test/agent-fixtures";
 import { dateFrom } from "../clock";
 
-describe("owned conversation deletion with real PGlite", () => {
+describe("owned conversation deletion with real Postgres", () => {
   let store: Store;
-  beforeAll(async () => { store = await createStore({ dataDir: ":memory:", clock: () => clock }); }, 30_000);
+  beforeAll(async () => { store = await createTestStore({ clock: () => clock }); }, 30_000);
   beforeEach(async () => { await store.db.execute(sql`TRUNCATE claims, memory, threads, turns RESTART IDENTITY CASCADE`); });
   afterAll(async () => store?.close());
   async function pair(userId: string, sessionId: string) {

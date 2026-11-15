@@ -1,7 +1,8 @@
+import { createTestStore } from "../../test/database";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { dateFrom } from "../clock";
-import { createStore, type Store } from "../store";
+import type { Store } from "../store";
 import { claims, curations } from "../store/schema";
 import { retrieve } from "../recall/retrieve";
 import { assemble } from "../agent/prompt";
@@ -25,9 +26,9 @@ function fixture(value = "$20/seat/mo", published = "2026-11-09T00:00:00Z", asOf
   return { evidence, extraction, answer: evidence.map((source) => source.snippet).join("\n") };
 }
 
-describe("post-response curator with real PGlite", () => {
+describe("post-response curator with real Postgres", () => {
   let store: Store;
-  beforeAll(async () => { store = await createStore({ dataDir: ":memory:", clock: () => clock }); }, 30_000);
+  beforeAll(async () => { store = await createTestStore({ clock: () => clock }); }, 30_000);
   beforeEach(async () => { await store.db.execute(sql`TRUNCATE curations, claims, memory, threads, turns RESTART IDENTITY CASCADE`); });
   afterAll(async () => { await store?.close(); });
 

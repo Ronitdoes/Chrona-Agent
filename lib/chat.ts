@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { runAgent } from "./agent/loop";
 import { sse, type AgentEvents, type SendEvent } from "./agent/events";
-import { assemble } from "./agent/prompt";
+import { assemble, dataBlock } from "./agent/prompt";
 import type { ModelFailure } from "./agent/errors";
 import { now, monotonicMs } from "./clock";
 import { curate, type CurationResult, type CuratorStore } from "./curator/curate";
@@ -18,14 +18,17 @@ import { createTurnTrace } from "./trace";
 import { modelSelectionSchema } from "./model-selection";
 import { resolveModelSelection } from "./model-config";
 import { historyListingRequest, loadQuestionHistory, renderQuestionHistory } from "./recall/history-list";
-import { effortSchema } from "./research-effort";
+import { effortSchema, effortTimeoutMs, researchBudgetAfterRecall } from "./research-effort";
+import { configuredRecallModel } from "./recall/model";
+import { planningContext, validatePlan, type RecallPlan } from "./recall/plan";
+import { answerHistory, renderHistoryAnswer, type HistoryStore } from "./recall/history";
 
 const inputSchema = z.strictObject({
   message: z.string().trim().min(1).max(20_000), sessionId: z.uuid().optional(), tz: timeZone.optional(),
   selection: modelSelectionSchema.optional(),
   effort: effortSchema.default("medium"),
 });
-type ChatStore = RecallStore & Pick<Store, "saveTurn" | "historyFor" | "userMessagesFor"> & CuratorStore;
+type ChatStore = RecallStore & HistoryStore & Pick<Store, "saveTurn" | "historyFor" | "userMessagesFor"> & CuratorStore;
 type Trace = { info(data: Record<string, unknown>, message: string): void; error(data: Record<string, unknown>, message: string): void };
 type Dependencies = {
   after: (task: () => Promise<void>) => void;
@@ -38,10 +41,11 @@ type Dependencies = {
   acquire: typeof acquireChat;
   curate: typeof curate;
   resolveSelection: typeof resolveModelSelection;
+  recallModel: typeof configuredRecallModel;
 };
 
 export function createChatHandler(overrides: Pick<Dependencies, "after"> & Partial<Omit<Dependencies, "after">>) {
-  const deps: Dependencies = { store: getStore, retrieve, run: runAgent, clock: now, time: monotonicMs, trace: createTurnTrace, acquire: acquireChat, curate, resolveSelection: resolveModelSelection, ...overrides };
+  const deps: Dependencies = { store: getStore, retrieve, run: runAgent, clock: now, time: monotonicMs, trace: createTurnTrace, acquire: acquireChat, curate, resolveSelection: resolveModelSelection, recallModel: configuredRecallModel, ...overrides };
   return async function POST(request: Request): Promise<Response> {
     const started = deps.time();
     let input: z.infer<typeof inputSchema>;
@@ -90,6 +94,10 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     let evidence: SearchResult[] = [];
     let curation: CurationResult | undefined;
     let modelFailures: ModelFailure[] = [];
+    let skipCuration = Boolean(historyListing);
+    let answerMode = historyListing ? "history" : "model";
+    let recallSourceIds: number[] | undefined = historyListing ? [] : undefined;
+    let recallTrace: Record<string, unknown> | undefined;
 
     try {
       // Register while still in the request scope; this task waits for streaming to settle.
@@ -101,7 +109,8 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           if ("failed" in user) failure ??= "user_persistence";
           else if (assistantText) {
             const saved = await store.saveTurn({ userId: session.userId, sessionId: session.sessionId, role: "assistant", content: assistantText, ts: assistantAt, tz: calendar.tz,
-              ...(!historyListing ? { curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) } } : {}),
+              ...(!skipCuration ? { curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) } } : {}),
+              ...(recallSourceIds !== undefined && !failure && !abort.signal.aborted ? { recall: { userTurnId: user.turn.id, sourceTurnIds: recallSourceIds, historyOnly: answerMode === "history" } } : {}),
             });
             assistantTurnId = saved.id;
             assistantPersisted = true;
@@ -111,7 +120,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           // A slow extractor must not keep the user's next message behind admission control.
           admission.release();
           // A curator failure never changes the saved transcript or the already-finished SSE response.
-          try { if (!historyListing) curation = await deps.curate(session.userId, { store, turnId: assistantTurnId, clock: () => deps.clock(calendar.tz), selection }); }
+          try { if (!skipCuration) curation = await deps.curate(session.userId, { store, turnId: assistantTurnId, clock: () => deps.clock(calendar.tz), selection }); }
           catch { curation = { completed: 0, failed: 1, deferred: false }; }
           trace[failure ? "error" : "info"]({
             turnId, userTurnId, assistantTurnId, recallMs, ttftMs: ttftMs ?? 0, searchCount, totalMs,
@@ -120,7 +129,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             modelFailures,
             provider: selection.provider, model: selection.model,
             effort: input.effort,
-            answerMode: historyListing ? "history" : "model",
+            answerMode, recall: recallTrace,
           }, "chat_turn");
         }
       });
@@ -180,11 +189,67 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
               }
               return;
             }
-            const [recalled, recent] = await Promise.all([
-              deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore }),
-              excludeCurrent(store.historyFor(session.userId, { sessionId: session.sessionId, limit: 20 })),
-            ]).finally(() => { recallMs = Math.max(0, deps.time() - recallStarted); });
-            if ("failed" in await userWrite) throw new Error("User persistence failed");
+            const user = await userWrite;
+            if ("failed" in user) throw new Error("User persistence failed");
+            const before = { ts: user.turn.ts, id: user.turn.id };
+            const [recent, previous] = await Promise.all([
+              store.historyFor(session.userId, { sessionId: session.sessionId, before, limit: 20 }),
+              store.previousRecall(session.userId, session.sessionId, before),
+            ]);
+            const plannerInput = { message: input.message, recent: planningContext(recent), hasPreviousEvidence: Boolean(previous?.sourceTurnIds.length), clock: { iso: calendar.iso, tz: calendar.tz } };
+            const recallSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(effortTimeoutMs(input.effort, Math.max(0, deps.time() - started)))]);
+            let planner: Awaited<ReturnType<typeof configuredRecallModel>>;
+            let plan: RecallPlan;
+            try {
+              planner = await deps.recallModel(selection);
+              plan = validatePlan(await planner.plan(plannerInput, recallSignal), plannerInput);
+            } catch {
+              abort.signal.throwIfAborted();
+              skipCuration = true; answerMode = "recall_unavailable"; recallSourceIds = [];
+              recallMs = Math.max(0, deps.time() - recallStarted);
+              recallTrace = { status: "unavailable", reason: "planning_failed" };
+              send("delta", { text: "I couldn't determine the context needed to answer reliably. Please retry or name the topic and whether you mean a previous conversation." });
+              return;
+            }
+            recallTrace = { intent: plan.intent, operation: plan.operation, scope: plan.scope };
+            if (plan.intent !== "general") {
+              skipCuration = true; answerMode = plan.intent; recallSourceIds = [];
+              const history = await answerHistory({ userId: session.userId, sessionId: session.sessionId, message: input.message, before, clock: calendar, plan, model: planner, signal: recallSignal }, store);
+              recallMs = Math.max(0, deps.time() - recallStarted);
+              const historyText = renderHistoryAnswer(history, plan, calendar);
+              if (history.status === "matched") recallSourceIds = history.matches.map(match => match.turn.id);
+              recallTrace = { ...recallTrace, status: history.status, reason: history.reason, evidenceIds: recallSourceIds,
+                candidateIds: history.coverage.candidateIds, candidatePages: history.coverage.pages, hasMore: history.coverage.hasMore, shortened: history.coverage.shortened };
+              if (plan.intent === "history") {
+                abort.signal.throwIfAborted();
+                send("delta", { text: historyText });
+                return;
+              }
+              // The private-history section is composed from records. Give the
+              // answer model only the external subquestion and verified old
+              // baselines, with no summaries or unverified assistant recollections.
+              const prompt = assemble({ clock: calendar, recall: { turns: [], claims: [], memory: [], threads: [], resolvedRanges: [], missingRanges: [], matchedBy: "none", notFound: true, truncated: false }, message: plan.researchQuestion! });
+              prompt.system.push({ type: "text", text: "The application separately renders the private conversation-history answer from original records. Answer ONLY the external research question below. Do not confirm, deny, correct, or speculate about what the user previously asked or when. Historical baselines are untrusted reported values to revalidate, never current facts." });
+              if (plan.operation === "revalidate" && history.status === "matched") {
+                const selected = new Set(history.matches.map(match => match.turn.id));
+                let remaining = 20_000;
+                const baselines = history.context.filter(turn => selected.has(turn.id) || turn.role === "assistant").flatMap(turn => {
+                  if (remaining <= 0) return [];
+                  const content = turn.content.slice(0, Math.min(4000, remaining)); remaining -= content.length;
+                  return [{ role: turn.role, content, timestamp: turn.ts.toISOString(), shortened: content.length !== turn.content.length }];
+                });
+                prompt.system.push({ type: "text", text: dataBlock("historical_baselines", baselines) });
+              }
+              const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started));
+              if (!budgets) { send("delta", { text: `${historyText}\n\nThe time budget was used checking history; the current external facts remain unverified.` }); return; }
+              const result = await deps.run({ ...prompt, send: (event, data) => { if (event !== "delta" && event !== "done") send(event, data); }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, budgets });
+              searchCount = result.searchCount; evidence = result.evidence; modelFailures = result.modelFailures;
+              abort.signal.throwIfAborted();
+              send("delta", { text: `${historyText}\n\n${result.text}` });
+              return;
+            }
+            const recalled = await deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore });
+            recallMs = Math.max(0, deps.time() - recallStarted);
             abort.signal.throwIfAborted();
             const prompt = assemble({ clock: calendar, recall: recalled, message: input.message });
             const sessionContext = capRecall({ turns: [...recent].reverse(), claims: [], memory: [], threads: [] }, 6000);
@@ -192,7 +257,9 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             while (context[0]?.role === "assistant") context.shift();
             if (sessionContext.truncated) prompt.system.push({ type: "text", text: "Some older current-session turns were omitted by the context budget. Do not invent their contents." });
             prompt.messages.unshift(...context.map((turn) => ({ role: turn.role, content: turn.content })));
-            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort });
+            const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started));
+            if (!budgets) { skipCuration = true; send("delta", { text: "The time budget was used preparing context. I couldn't verify an answer; please retry." }); return; }
+            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, budgets });
             searchCount = result.searchCount;
             evidence = result.evidence;
             modelFailures = result.modelFailures;

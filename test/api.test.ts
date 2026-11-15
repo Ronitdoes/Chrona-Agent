@@ -1,15 +1,18 @@
+import { createTestStore } from "./database";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { createChatHandler } from "../lib/chat";
 import { createHistoryHandler } from "../lib/historyHandler";
 import { runAgent } from "../lib/agent/loop";
 import { ModelProviderError } from "../lib/agent/errors";
-import { createStore, type Store } from "../lib/store";
+import type { Store } from "../lib/store";
 import { createRequestLimit } from "../lib/requestLimit";
 import { clock, FakeModel } from "./agent-fixtures";
 import { decodeCursor } from "../lib/history";
 import { curate } from "../lib/curator/curate";
 import { dateFrom } from "../lib/clock";
+import type { RecallModel, RecallPlan } from "../lib/recall/plan";
+import { threads } from "../lib/store/schema";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -18,9 +21,9 @@ const post = (value: unknown, options: RequestInit = {}) => new Request("http://
   method: "POST", headers: { "Content-Type": "application/json", cookie }, body: JSON.stringify(value), ...options,
 });
 
-describe("chat and history backend with real PGlite and fake model", () => {
+describe("chat and history backend with real Postgres and fake model", () => {
   let store: Store;
-  beforeAll(async () => { store = await createStore({ dataDir: ":memory:", clock: () => clock }); }, 30_000);
+  beforeAll(async () => { store = await createTestStore({ clock: () => clock }); }, 30_000);
   beforeEach(async () => { await store.db.execute(sql`TRUNCATE claims, memory, threads, turns RESTART IDENTITY CASCADE`); });
   afterAll(async () => { await store?.close(); });
 
@@ -33,6 +36,7 @@ describe("chat and history backend with real PGlite and fake model", () => {
       clock: () => clock, time: () => 0, trace: () => logger,
       acquire: createRequestLimit(() => 0),
       resolveSelection: async requested => requested ?? { provider: "gemini", model: "test-model" },
+      recallModel: async () => ({ plan: async () => ({ intent: "general", operation: "list", queries: [], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null }), select: vi.fn() }),
       curate: async () => ({ completed: 0, failed: 0, deferred: false }),
       run: (options) => {
         const model = new FakeModel([{ text: ["A short ", "answer."] }]);
@@ -111,6 +115,85 @@ describe("chat and history backend with real PGlite and fake model", () => {
     ]);
     expect(JSON.stringify(app.models[0].requests)).not.toContain("Private secret");
     await app.flush();
+  });
+
+  const historyPlan = (overrides: Partial<RecallPlan> = {}): RecallPlan => ({ intent: "history", operation: "exists", queries: ["neon pricing"], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null, ...overrides });
+  const historyCases = (["gemini", "anthropic"] as const).flatMap(provider => (["instant", "medium", "high"] as const).map(effort => ({ provider, effort })));
+  it("handles fractional monotonic timing in the real history request path", async () => {
+    let tick = 0;
+    const source = await store.saveTurn({ userId, sessionId, role: "user", content: "check neon db current pricing", ts: dateFrom("2026-11-15T10:10:12Z") });
+    const run = vi.fn();
+    const app = harness({ time: () => { tick += 0.125; return tick; }, run,
+      recallModel: async () => ({ plan: async () => historyPlan(), select: async () => ({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] }) }),
+    });
+    const body = await (await app.handler(post({ message: "did i ask u about neon db?", effort: "instant" }))).text();
+    expect(body).not.toContain("event: error");
+    expect(body).toContain("Yes — I found");
+    expect(body).toContain(source.content);
+    expect(run).not.toHaveBeenCalled();
+    await app.flush();
+  });
+  it.each(historyCases)("grounds the screenshot's two-turn flow with $provider/$effort without web search or curation", async ({ provider, effort }) => {
+    const source = await store.saveTurn({ userId, sessionId: "33333333-3333-4333-8333-333333333333", role: "user", content: "check neon db current pricing", ts: dateFrom("2026-11-15T10:10:12Z") });
+    await store.saveTurn({ userId, sessionId: source.sessionId, role: "assistant", content: "Neon pricing " + "x".repeat(20_000), ts: dateFrom("2026-11-15T10:10:13Z") });
+    await store.db.insert(threads).values({ userId, title: "Neon", summary: "The user never asked about pricing.", lastTs: clock.instant });
+    const plan = vi.fn<RecallModel["plan"]>().mockResolvedValueOnce(historyPlan()).mockResolvedValueOnce(historyPlan({ operation: "when", usePreviousEvidence: true }));
+    const select = vi.fn<RecallModel["select"]>().mockResolvedValue({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] });
+    const run = vi.fn(); const retrieve = vi.fn(); const background = vi.fn();
+    const app = harness({ run, retrieve, curate: background, recallModel: async () => ({ plan, select }), clock: tz => ({ ...clock, tz: tz ?? "UTC" }) });
+    const first = await (await app.handler(post({ message: "do you remember i asked for neon pricing yes or no?", selection: { provider, model: "test-model" }, effort, tz: "Asia/Calcutta" }))).text();
+    expect(first).toContain("Yes — I found"); expect(first).toContain(source.content);
+    expect(first).not.toContain("event: sources"); expect(first.match(/event: done/g)).toHaveLength(1);
+    await app.flush();
+    const second = await (await app.handler(post({ message: "at what time did i ask for it", selection: { provider, model: "test-model" }, effort, tz: "Asia/Calcutta" }))).text();
+    expect(second).toContain("15 November 2026 at 15:40:12"); expect(second).toContain("Asia/Calcutta");
+    expect(second).toContain(source.content); expect(second).not.toContain("misunderstanding"); expect(second).not.toContain("event: sources");
+    expect(plan.mock.calls[1][0].hasPreviousEvidence).toBe(true);
+    expect(select).toHaveBeenCalledOnce(); expect(run).not.toHaveBeenCalled(); expect(retrieve).not.toHaveBeenCalled();
+    await app.flush();
+    expect(background).not.toHaveBeenCalled(); expect(await store.pendingCurations(userId)).toHaveLength(0);
+    expect(app.logger.info.mock.calls.at(-1)?.[0]).toMatchObject({ answerMode: "history", searchCount: 0, recall: { evidenceIds: [source.id], reason: "verified_antecedent" } });
+  });
+
+  it("does not confirm a request from summaries, assistant assertions or the saved recall question itself", async () => {
+    await store.db.insert(threads).values({ userId, title: "Neon", summary: "The user asked for Neon pricing.", lastTs: clock.instant });
+    await store.saveTurn({ userId, sessionId, role: "assistant", content: "You asked for Neon pricing", ts: dateFrom("2026-11-15T10:00:00Z") });
+    const select = vi.fn(); const run = vi.fn(); const background = vi.fn();
+    const app = harness({ run, curate: background, recallModel: async () => ({ plan: async () => historyPlan(), select }) });
+    const first = await (await app.handler(post({ message: "do you remember i asked for neon pricing yes or no?" }))).text();
+    expect(first).toContain("couldn't locate an original matching message"); expect(first).not.toContain("Yes");
+    await app.flush();
+    const second = await (await app.handler(post({ message: "Did I actually ask for Neon pricing previously?" }))).text();
+    expect(second).toContain("couldn't locate an original matching message"); expect(second).not.toContain("Yes");
+    expect(select).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled();
+    await app.flush(); expect(background).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on planner errors rather than letting a model guess or search", async () => {
+    const run = vi.fn(); const background = vi.fn();
+    const app = harness({ run, curate: background, recallModel: async () => { throw new Error("private-provider-details"); } });
+    const body = await (await app.handler(post({ message: "When did I ask about Neon?" }))).text();
+    expect(body).toContain("couldn't determine the context"); expect(body).not.toContain("private-provider-details");
+    expect(body.match(/event: done/g)).toHaveLength(1); expect(run).not.toHaveBeenCalled();
+    await app.flush(); expect(background).not.toHaveBeenCalled();
+  });
+
+  it("composes mixed answers from separate stored-history and web evidence", async () => {
+    const source = await store.saveTurn({ userId, sessionId, role: "user", content: "Check Neon pricing", ts: dateFrom("2026-11-14T10:00:00Z") });
+    const model = new FakeModel([{ tools: [{ input: { queries: ["Neon pricing now"] } }] }, { text: ["Current Neon prices need the official pricing page. [Source](https://neon.com/pricing)"] }]);
+    const search = vi.fn(async () => ({ queries: [{ query: "Neon pricing now", results: [{ title: "Neon pricing", url: "https://neon.com/pricing", snippet: "Current plans", published_date: null, is_official: true }] }], content: "", is_error: false, truncated: false }));
+    const select = vi.fn<RecallModel["select"]>().mockResolvedValue({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] });
+    const background = vi.fn();
+    const app = harness({ curate: background, recallModel: async () => ({ plan: async () => historyPlan({ intent: "mixed", operation: "when", researchQuestion: "Search the web for current Neon pricing" }), select }),
+      run: options => runAgent({ ...options, model, search }),
+    });
+    const body = await (await app.handler(post({ message: "When did I ask about Neon pricing, and what does it cost now?" }))).text();
+    expect(body).toContain("14 November 2026 at 10:00:00"); expect(body).toContain(source.content); expect(body).toContain("Current Neon prices");
+    expect(search).toHaveBeenCalledOnce(); expect(body.match(/event: done/g)).toHaveLength(1);
+    expect(model.requests[0].messages).toEqual([{ role: "user", content: "Search the web for current Neon pricing" }]);
+    expect(JSON.stringify(model.requests[0].system)).not.toContain("When did I ask");
+    expect(model.requests.every(request => request.tools?.length === 1)).toBe(true);
+    await app.flush(); expect(background).not.toHaveBeenCalled();
   });
 
   it.each(["gemini", "anthropic"] as const)("lists all of today's user messages across chats with %s, without model/search/curation costs", async provider => {

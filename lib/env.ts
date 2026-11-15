@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { modelIdSchema } from "./model-selection";
+import { databaseUrlSchema } from "./database-url";
 
 const optionalText = z.string().trim().default("");
 
@@ -11,7 +12,8 @@ const envSchema = z.object({
   GEMINI_MODEL: modelIdSchema.default("gemini-3.5-flash-lite"),
   TAVILY_API_KEY: z.string().trim().min(1, "TAVILY_API_KEY is required"),
   EXA_API_KEY: optionalText,
-  DATABASE_URL: optionalText,
+  DATABASE_URL: databaseUrlSchema,
+  TEST_DATABASE_URL: databaseUrlSchema.optional(),
   DEFAULT_TZ: z.string().trim().min(1).default("Asia/Kolkata"),
   NOW_OVERRIDE: optionalText,
 }).superRefine((value, context) => {

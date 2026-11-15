@@ -1,18 +1,18 @@
 import { and, asc, desc, eq, getTableColumns, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { now, type Clock } from "../clock";
 import type { HistoryCursor } from "../history";
 import * as schema from "./schema";
-import { claims, curations, memory, threads, turns } from "./schema";
+import { claims, curations, memory, threads, turns, recallReferences } from "./schema";
 import type { SearchResult } from "../tools/results";
 
-export type StoreDatabase = NodePgDatabase<typeof schema> | PgliteDatabase<typeof schema>;
+export type StoreDatabase = NodePgDatabase<typeof schema>;
 export const USER_MEMORY_LOCK = 781424;
 export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionId" | "role" | "content"> & {
   ts?: Date;
   tz?: string;
   curation?: { userTurnId: number; evidence: SearchResult[] };
+  recall?: { userTurnId: number; sourceTurnIds: number[]; historyOnly?: boolean };
 };
 
 function scopedUser(userId: string): string {
@@ -76,21 +76,31 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
     async saveTurn(input: SaveTurnInput) {
       scopedUser(input.userId);
       const current = input.ts ? undefined : clock();
-      const { curation, ...fields } = input;
+      const { curation, recall, ...fields } = input;
       const values = {
         ...fields,
         ts: input.ts ?? current!.instant,
         tz: input.tz ?? current?.tz,
       };
-      if (!curation) return (await db.insert(turns).values(values).returning())[0];
+      if (!curation && !recall) return (await db.insert(turns).values(values).returning())[0];
       return db.transaction(async (tx) => {
+        const userTurnId = curation?.userTurnId ?? recall!.userTurnId;
         const [user] = await tx.select().from(turns).where(and(
-          eq(turns.id, curation.userTurnId), eq(turns.userId, input.userId),
+          eq(turns.id, userTurnId), eq(turns.userId, input.userId),
           eq(turns.sessionId, input.sessionId), eq(turns.role, "user"),
         ));
         if (input.role !== "assistant" || !user) throw new Error("Curation requires an owned conversation pair");
+        if (recall) {
+          const ids = [...new Set(recall.sourceTurnIds)];
+          if (ids.length > 10 || ids.some(id => !Number.isSafeInteger(id) || id < 1) || recall.userTurnId !== userTurnId) throw new Error("Invalid recall references");
+          const sources = ids.length ? await tx.select().from(turns).where(and(eq(turns.userId, input.userId), eq(turns.role, "user"), inArray(turns.id, ids),
+            or(lt(turns.ts, user.ts), and(eq(turns.ts, user.ts), lt(turns.id, user.id))),
+          )) : [];
+          if (sources.length !== ids.length) throw new Error("Recall references must be owned earlier user messages");
+        }
         const [turn] = await tx.insert(turns).values(values).returning();
-        await tx.insert(curations).values({ turnId: turn.id, userTurnId: user.id, userId: input.userId, evidence: curation.evidence });
+        if (curation) await tx.insert(curations).values({ turnId: turn.id, userTurnId: user.id, userId: input.userId, evidence: curation.evidence });
+        if (recall) await tx.insert(recallReferences).values({ answerTurnId: turn.id, requestTurnId: user.id, userId: input.userId, sourceTurnIds: [...new Set(recall.sourceTurnIds)], historyOnly: recall.historyOnly ?? true });
         return turn;
       });
     },

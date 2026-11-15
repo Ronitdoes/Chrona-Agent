@@ -43,16 +43,16 @@ Revisit signed account sessions and shared rate limiting before exposing direct
 account data or scaling across multiple server instances.
 
 Step 3 stores `turns`, `claims`, `memory` and `threads` in Postgres through a shared
-Drizzle schema. A configured `DATABASE_URL` selects a `pg.Pool` (use Neon's pooled
-URL); an empty value selects PGlite at `./data/pglite`. Driver initialization uses
-the documented [PGlite](https://orm.drizzle.team/docs/connect-pglite) and
-[node-postgres](https://orm.drizzle.team/docs/get-started-postgresql) client APIs,
-checked against the installed Drizzle types. PGlite is a local development option;
-serverless deployments need persistent hosted Postgres.
+Drizzle schema. A required, validated `DATABASE_URL` configures a `pg.Pool` through
+`drizzle-orm/node-postgres`. Local development uses the Postgres 18 Docker Compose
+service with a persistent named volume and a localhost-only port. Start it with
+`npm run db:up` before `npm run dev`; hosted deployments supply their own Postgres
+URL. There is no embedded fallback. Connection startup has a bounded timeout and
+reports failures without exposing credentials.
 
 Next.js's Node instrumentation hook awaits `getStore()` before handling requests.
 A shared initialization promise reuses the connection during development reloads.
-Both drivers apply the same append-only, hand-written SQL in `lib/store/migrate.ts`.
+The driver applies append-only, hand-written SQL in `lib/store/migrate.ts`.
 A transaction and advisory lock serialize first boot, and a migration ledger makes
 repeat startup a no-op. Failed migrations roll back and close the client. SQL is
 embedded so deployment does not depend on copying migration files at runtime;
@@ -68,16 +68,34 @@ The six query helpers are methods on the store returned by `getStore()` or
 users. Claim reads also check ownership of the linked turn. Turn writes use the
 injected clock when no explicit timestamp is supplied.
 
-This chooses one Postgres-compatible data model over separate SQLite and Postgres
-implementations, which would require two full-text search paths. PGlite runs in one
-process, so revisit the fallback if local development needs multiple independent
-server processes sharing a database directory. Application-scoped isolation fits
+This uses one Postgres data model and full-text search implementation across
+local development, tests and hosted deployments. A separate disposable Docker
+test service and one database per suite isolate test cleanup from application data.
+Application-scoped isolation fits
 the cookie-based user model; revisit database row-level security if untrusted
 clients ever receive direct database access.
 
-## 3. Why recall is deterministic code
+## 3. Why recall combines semantic planning with deterministic evidence
 
-Step 6's `retrieve({ userId, text, now })` resolves dates and starts independent
+A structured call first identifies general, history-only and mixed requests and
+resolves follow-up references from bounded session context. It exposes no tools.
+History-only answers retrieve original user messages and render validated quotes
+and stored timestamps directly, without web search or free-form answer generation.
+Ownership, chronology, quote membership, date ranges and persistence remain plain
+tested code. A model selects semantic matches, so a valid ID and quote do not by
+themselves prove the interpretation is correct. Missing evidence produces scoped
+uncertainty rather than a claim that a conversation never happened.
+
+Validated source IDs persist with history answers for timestamp follow-ups and
+are rechecked after deletion. Recorded history-only recall requests are excluded
+from topical search to prevent self-confirmation. Summaries and assistant claims
+are not original user evidence. Mixed requests keep history and fresh external
+research separate; the answer loop still has only `web_search`. Interpretation,
+retrieval and synthesis share the selected effort's time budget. This costs an
+extra model call on ordinary turns in exchange for context-aware routing.
+See [the implementation and evaluation](docs/MEMORY_RECALL.md) for bounds and tests.
+
+For general research context, Step 6's `retrieve({ userId, text, now })` resolves dates and starts independent
 turn-range, memory and thread queries concurrently. Claims load as soon as the
 matching turn IDs are known. The default store comes from `getStore()`, while
 tests inject a store. Recall remains user-scoped across sessions. No date match
@@ -94,7 +112,7 @@ oversized rows are omitted instead of rewriting their historical text. `truncate
 distinguishes budget omission from `notFound`. Rows are also checked for user
 ownership at the assembly boundary.
 
-Step 2 resolves calendar expressions before the model runs. `now(tz)` in
+Step 2 resolves calendar expressions in plain code before retrieval queries. `now(tz)` in
 `lib/clock.ts` supplies the instant, timezone, ISO timestamp and readable local
 time. `NOW_OVERRIDE` accepts an ISO timestamp with `Z` or an explicit UTC offset
 so evals do not depend on the host timezone. Explicit date construction also lives
@@ -405,7 +423,8 @@ expressions, year/month boundaries and daylight saving transitions. Clock tests
 cover override validation, offset normalization, the default timezone and the
 system-clock fallback. The end-to-end eval harness is planned for Step 13.
 
-Storage integration tests use real PGlite databases and verify generated search
+Storage integration tests use isolated databases on the disposable Docker Postgres
+test service and verify generated search
 vectors, the GIN index, date boundaries, keyword ranking, cross-session recall,
 user isolation, constraints, migration reruns and persistence across reopening.
 Separate tests check Postgres driver selection and cleanup using a mocked pool,
@@ -434,11 +453,11 @@ turn/claim budgets, cached-prefix stability, timestamped context and missing
 history. Fake-model tests assert the single search batch, tool-result IDs, exact
 SSE payloads, step/query/time/output budgets, tools-disabled finalization, partial
 errors and cancellation. One test uses the real Anthropic SDK parser with a
-mocked SSE HTTP response; another verifies recall against real in-memory PGlite.
+mocked SSE HTTP response; another verifies recall against an isolated Docker Postgres database.
 These checks do not invoke paid model or search APIs. API routes, session cookies,
 turn persistence and pino turn traces are implemented in Step 7.
 
-Step 7 integration tests exercise chat and history against real PGlite with fake
+Step 7 integration tests exercise chat and history against real Docker Postgres with fake
 model streams. They check immediate/deferred persistence, exclusion of the new
 turn from recall, follow-up context, cancellation, private user/session scopes,
 pagination with timestamp ties, request bounds, rate limits and one trace per
@@ -446,7 +465,7 @@ turn. Mocked Gemini SSE tests cover byte-fragmented content, signed function cal
 paired results, incomplete streams and safe errors. Provider configuration tests
 verify the selected provider's key requirements. Normal tests never make paid provider calls.
 
-Step 8 tests seed the five-CRM shortlist against real PGlite and confirm that its
+Step 8 tests seed the five-CRM shortlist against real Docker Postgres and confirm that its
 claims reach the recall prompt and suggested revalidation queries. They cover
 duplicate/concurrent passes, quote and URL provenance, invalid output, dated
 supersession, memory corrections, thread merges, user isolation, rollback,
@@ -454,7 +473,7 @@ restart persistence, delayed retries and persistent failures. SDK tests use a
 mocked HTTP response to verify Haiku structured JSON without tools or paid API
 calls. Gemini tests verify provider selection without an Anthropic key, native
 JSON schema configuration, cancellation, invalid/truncated/blocked responses and
-retrying extraction into real PGlite. Route tests confirm extraction follows persistence and streaming, failures
+retrying extraction into real Docker Postgres. Route tests confirm extraction follows persistence and streaming, failures
 preserve history, and the next message can proceed while the curator runs.
 Run `npm test -- lib/curator test/api.test.ts lib/store/store.test.ts`.
 
@@ -604,7 +623,7 @@ same SSE contract, persists the answer, and skips both generation and curation,
 so Anthropic and Gemini selections have identical history-list behavior with no
 provider cost. Tests cover more than 100 saved turns, multiple DB pages, fresh
 later messages, local midnight/DST, timestamp ties, tenant isolation, omission
-disclosure and both provider selections with real PGlite.
+disclosure and both provider selections with real Docker Postgres.
 
 Conversation deletion uses a native confirmation dialog and an idempotent Node
 DELETE endpoint. One transaction removes only the user's selected session and

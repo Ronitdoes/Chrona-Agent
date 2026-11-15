@@ -30,7 +30,7 @@ describe("Postgres driver selection", () => {
   it("uses a pg pool and awaits migrations when DATABASE_URL is provided", async () => {
     const store = await createStore({ databaseUrl: " postgres://user@localhost/test " });
     expect(store.driver).toBe("postgres");
-    expect(mocks.pool).toHaveBeenCalledWith({ connectionString: "postgres://user@localhost/test" });
+    expect(mocks.pool).toHaveBeenCalledWith({ connectionString: "postgres://user@localhost/test", connectionTimeoutMillis: 5_000 });
     expect(mocks.drizzle).toHaveBeenCalledWith(expect.anything(), { schema: expect.objectContaining({ turns: expect.anything() }) });
     expect(mocks.migrate).toHaveBeenCalledWith(db);
     await store.close();
@@ -40,7 +40,20 @@ describe("Postgres driver selection", () => {
   it("closes the pool and surfaces startup migration failures", async () => {
     const failure = new Error("migration failed");
     mocks.migrate.mockRejectedValue(failure);
-    await expect(createStore({ databaseUrl: "postgres://user@localhost/test" })).rejects.toBe(failure);
+    await expect(createStore({ databaseUrl: "postgres://user@localhost/test" })).rejects.toThrow("Postgres initialization failed");
+    expect(mocks.end).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, "", " ", "invalid", "https://user:secret@localhost/test"])("rejects missing or malformed database URLs before opening a pool %#", async databaseUrl => {
+    await expect(createStore({ databaseUrl: databaseUrl as string })).rejects.toThrow();
+    expect(mocks.pool).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable database without leaking connection credentials", async () => {
+    mocks.migrate.mockRejectedValue(new Error("connection refused: postgres://user:secret@localhost/test"));
+    const error = await createStore({ databaseUrl: "postgres://user:secret@localhost/test" }).catch(error => error);
+    expect(error.message).toContain("npm run db:up");
+    expect(error.message).not.toContain("secret");
     expect(mocks.end).toHaveBeenCalledOnce();
   });
 });

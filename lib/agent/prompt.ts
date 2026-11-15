@@ -15,7 +15,7 @@ HOW TO ANSWER
 - Resolve today, yesterday and tomorrow in the user's supplied timezone, not UTC or the venue's timezone. A source's publication/retrieval date does not establish the event date. Label venue-local dates separately; do not convert a date-only event without a time and timezone.
 - A match that finished earlier today is still a match played today. Say "Today's match has finished; it is no longer live." Do not also say there is no match today. Say no match is live now only when that narrower claim is supported. Missing current coverage does not establish that no fixture exists.
 - Give an as-of date and source links for time-sensitive facts.
-- Search for prices, versions, releases, latest/still/changed questions, live sports scores and current role holders.
+- Search for current external prices, versions, releases, latest/still/changed questions, live sports scores and current role holders. A question about whether or when the user previously asked about pricing is private history, not a request for current prices; public search cannot establish private conversation facts.
 - For live scores, identify the match date and the source's latest score timestamp. Never present an old article, prediction or video title as a verified live score.
 - For a score today/now/live, first identify the actual teams, competition, match date and status. Do not assume a match number, format, venue or series from a snippet or past conversation.
 - Use at most two focused live-score search passes: identify the fixture, then resolve one concrete evidence gap. Prefer scorecard pages with deep content. Do not keep searching for a score you guessed.
@@ -34,6 +34,7 @@ REVALIDATING PAST ANSWERS
 - Claim a change only when a dated source after the claim supports it. Respect deterministic comparison results when supplied.
 
 MISSING HISTORY AND LIMITS
+- A lexical hit is only a candidate, not proof of the requested recollection. Assistant assertions, summaries, and questions about remembering an earlier request cannot establish that the user actually made that original request. Never invent a reason that a summary was mistaken.
 - If no matching turns were found, say so plainly. Never invent a past question or answer; ask for the missing context.
 - Missing recalled history does not block a fresh factual lookup. Mention missing history only when the user asks about past conversations.
 - Keyword matches from other dates are background only; they do not establish what happened on a missing requested date.
@@ -65,7 +66,7 @@ export function assemble({ clock, recall, message }: { clock: Clock; recall: Rec
   const missing = recall.missingRanges.map((range) => range.label).join(", ");
   const historyStatus = recall.notFound
     ? `No matching turns found${missing ? ` for ${missing}` : " for this request"}; do not invent memory. Mention missing history only if the user asks about past conversations. Fresh factual lookups can still use web evidence.`
-    : "Matching historical turns were found.";
+    : "Historical candidates were retrieved; verify the original user text before asserting a recollection.";
   const volatile = [
     `CURRENT TIME: ${clock.human}; ISO: ${clock.instant.toISOString()}; timezone: ${clock.tz}`,
     `USER CALENDAR: ${calendar.weekday}, ${calendar.todayLabel}; today=${calendar.today}; local time=${calendar.localTime}; timezone=${calendar.timezone}. This is the authoritative meaning of today for this request.`,
@@ -88,11 +89,11 @@ export function assemble({ clock, recall, message }: { clock: Clock; recall: Rec
       value: claim.value, asOf: claim.asOf.toISOString(), sources: claim.sourceUrls,
     }))),
     "SUGGESTED QUERIES:", dataBlock("suggested_queries", hints(recall.claims, clock)),
-    "RECENT THREAD SUMMARIES:", dataBlock("threads", recall.threads.map((thread) => ({ title: thread.title, summary: thread.summary, lastTs: thread.lastTs.toISOString() }))),
+    "RECENT THREAD SUMMARIES (derived hints, never proof of a past request or its time):", dataBlock("threads", recall.threads.map((thread) => ({ title: thread.title, summary: thread.summary, lastTs: thread.lastTs.toISOString(), sourceTurnId: thread.sourceTurnId }))),
   ].filter(Boolean).join("\n");
   return {
     clock,
-    system: [{ type: "text", text: `${BASE_SYSTEM_PROMPT}\nCURATED MEMORY:\n${dataBlock("memory", recall.memory.map(({ key, value }) => ({ key, value })))}`, cache_control: { type: "ephemeral" } },
+    system: [{ type: "text", text: `${BASE_SYSTEM_PROMPT}\nCURATED MEMORY (derived hints; original records are required for recollections):\n${dataBlock("memory", recall.memory.map(({ key, value, sourceTurnId }) => ({ key, value, sourceTurnId })))}`, cache_control: { type: "ephemeral" } },
       { type: "text", text: volatile }],
     messages: [{ role: "user", content: message }],
   };

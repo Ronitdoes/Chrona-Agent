@@ -1,0 +1,38 @@
+name: web-agent-core
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: chrona
+      POSTGRES_PASSWORD: chrona_local
+      POSTGRES_DB: chrona
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chrona -d chrona"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  postgres-test:
+    image: postgres:18
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: chrona_test
+      POSTGRES_PASSWORD: chrona_test_local
+      POSTGRES_DB: chrona_test
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chrona_test -d chrona_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres_data:

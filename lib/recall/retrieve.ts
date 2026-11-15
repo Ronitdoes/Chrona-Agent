@@ -49,8 +49,8 @@ function turnGroups(turns: Turn[]): Turn[][] {
 }
 
 /** Keep complete fetched user/assistant pairs, with no lossy transcript rewriting. */
-export function capRecall(input: Pick<Recall, "turns" | "claims" | "memory" | "threads">, maxTokens: number) {
-  let remaining = maxTokens;
+export function capRecall(input: Pick<Recall, "turns" | "claims" | "memory" | "threads">, maxBytes: number) {
+  let remaining = maxBytes;
   let truncated = false;
   const take = <T>(value: T, display: unknown = value): boolean => {
     const size = Buffer.byteLength(JSON.stringify(display), "utf8") + 1;
@@ -70,11 +70,11 @@ export function capRecall(input: Pick<Recall, "turns" | "claims" | "memory" | "t
 }
 
 export async function retrieve(
-  { userId, text, now, maxTokens = 6000 }: { userId: string; text: string; now: Clock; maxTokens?: number },
+  { userId, text, now, maxBytes = 6000 }: { userId: string; text: string; now: Clock; maxBytes?: number },
   dependencies: { store?: RecallStore } = {},
 ): Promise<Recall> {
   if (!userId.trim()) throw new Error("Recall requires a userId");
-  if (!Number.isInteger(maxTokens) || maxTokens < 512) throw new Error("Recall budget must be at least 512 tokens");
+  if (!Number.isInteger(maxBytes) || maxBytes < 512) throw new Error("Recall budget must be at least 512 bytes");
   const store = dependencies.store ?? await (await import("../store")).getStore();
   const resolvedRanges = resolveDates(text, now.instant, now.tz);
   const lookup = async () => {
@@ -101,7 +101,7 @@ export async function retrieve(
     claims: matched.claims.filter((claim) => claim.userId === userId),
     memory: memory.filter((item) => item.userId === userId),
     threads: threads.filter((thread) => thread.userId === userId),
-  }, maxTokens);
+  }, maxBytes);
   return {
     ...capped, resolvedRanges, missingRanges: matched.missingRanges,
     matchedBy: matched.turns.length ? matched.matchedBy : "none", notFound: !matched.turns.length,

@@ -10,6 +10,23 @@ export const effortProfiles = {
   high: { label: "High", range: "9–10", maxQueries: 10, maxSources: 10, maxSteps: 4, maxWallMs: 90_000, finalReserveMs: 15_000, resultTokens: 16_000, outputTokens: 4096, thinking: "high" },
 } as const;
 
+/** Interpretation, retrieval and synthesis share the user's chosen time budget. */
+export function researchBudgetAfterRecall(effort: ResearchEffort, elapsedMs: number): { maxWallMs: number; finalReserveMs: number } | null {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new Error("Invalid elapsed time");
+  const profile = effortProfiles[effort];
+  const maxWallMs = profile.maxWallMs - elapsedMs;
+  return maxWallMs <= 1000 ? null : { maxWallMs, finalReserveMs: Math.min(profile.finalReserveMs, maxWallMs) };
+}
+
+/** Node's AbortSignal.timeout requires integer milliseconds, while the injected
+ * monotonic clock normally returns fractional values. Keep a positive delay
+ * even when preparation has already exhausted the effort budget.
+ */
+export function effortTimeoutMs(effort: ResearchEffort, elapsedMs: number): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new Error("Invalid elapsed time");
+  return Math.max(1, Math.floor(effortProfiles[effort].maxWallMs - elapsedMs));
+}
+
 /** Fairly retain distinct sources across queries and earlier search batches. */
 export function limitResearchSources(queries: QueryResult[], known: ReadonlySet<string>, maximum: number) {
   const allowed = new Set(known);

@@ -4,16 +4,16 @@ A time-aware research assistant for historical conversations and present-day ver
 
 ## Getting Started
 
-First, run the development server:
+Install Node.js and Docker Desktop (with its Linux engine running). Copy
+`.env.example` to `.env.local` and configure an answer-provider key plus
+`TAVILY_API_KEY`. Keep the example `DATABASE_URL` for local development.
+
+Install dependencies, start Postgres, then run the development server:
 
 ```bash
+npm install
+npm run db:up
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
@@ -26,7 +26,41 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 The backend is available at `POST /api/chat` and `GET /api/history`. Copy
 `.env.example` to `.env.local` and configure the answer provider plus `TAVILY_API_KEY`.
-Leaving `DATABASE_URL` empty uses local PGlite with automatic migrations.
+`DATABASE_URL` is required and must identify a PostgreSQL database. Local storage
+uses the `postgres:18` Docker service, bound only to `127.0.0.1:5432`, with automatic
+startup migrations. Next.js runs on the host. Hosted Postgres URLs are also supported.
+
+`npm run db:up` starts Postgres and waits for its health check. `npm run db:stop`
+stops the application database; `npm run db:down` removes Compose containers and
+the network. Both preserve the named database volume. `npm run db:logs` follows
+database logs. Local credentials in Compose and `.env.example` are development
+defaults; use separate credentials for hosted deployments. Do not run
+`docker compose down -v` unless you intend to delete the local database.
+
+### Database-backed tests
+
+```bash
+npm run db:test:up
+npm test
+npm run db:test:down
+```
+
+The test service listens only on `127.0.0.1:5433` and uses disposable storage.
+`TEST_DATABASE_URL` defaults to the dedicated local URL in `.env.example`; an
+explicit override must still identify that test service. Every database-backed
+suite creates and drops its own database. Tests never use `DATABASE_URL` for
+cleanup, and normal tests make no paid model or search requests.
+
+### Existing-data transfer
+
+The local cutover preserves the original database and a filesystem backup under
+ignored `data/`. The text-format export and successful verification report live
+under `data/postgres-cutover/`; these files contain private conversation data and
+must remain uncommitted. The application and test suite use only Postgres.
+`importSnapshot` in `lib/store/transfer.ts` supports saved version 1–4 snapshots,
+requires an empty migrated target, verifies transferred values and search data,
+and commits rows and sequence resets together. Stop application writes during a
+transfer. A failed import leaves the source intact and rolls back the target.
 
 For Google AI Studio, use `MODEL_PROVIDER=gemini`, `GEMINI_API_KEY` and
 `GEMINI_MODEL=gemini-3.5-flash-lite`. For Anthropic, keep
@@ -56,6 +90,19 @@ fresh user-message pages across conversations directly from the database. They
 include local timestamps, exclude the current request, and do not call a model,
 web search or curator. Lists keep recent entries and explicitly disclose any
 response limit rather than presenting an early-day prefix as complete.
+
+Other history questions use structured intent planning followed by scoped searches
+of original user messages. “Do you remember I asked about Neon pricing?” and
+“at what time?” use verified source messages and stored local timestamps, without
+web search. Follow-ups retain source IDs, recheck deleted messages, and report
+uncertainty when an original cannot be verified. Summaries and assistant assertions
+cannot supply history evidence. Mixed history/research requests keep their saved
+history section separate from fresh web evidence. Planning, recall and synthesis
+share the selected effort's time budget; planning adds a model request to ordinary
+turns. No additional model-facing tool or environment variable is introduced.
+See [the recall implementation](docs/MEMORY_RECALL.md) for limits and validation.
+`npm run recall:live-eval` is an opt-in evaluation using synthetic fixtures and
+the configured provider keys; it performs no conversation or curation writes.
 
 The trash action beside a conversation opens a confirmation dialog. Confirming
 permanently deletes that chat and its source-linked claims, memory, thread notes

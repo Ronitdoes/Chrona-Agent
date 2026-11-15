@@ -62,6 +62,22 @@ const migrations = [{
     )`,
     `CREATE INDEX curations_pending ON curations (user_id, turn_id) WHERE completed IS NULL`,
   ],
+}, {
+  version: 3,
+  statements: [
+    `CREATE TABLE recall_references (
+      answer_turn_id bigint PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+      request_turn_id bigint NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      user_id text NOT NULL,
+      source_turn_ids jsonb NOT NULL
+    )`,
+    `CREATE INDEX recall_references_user_answer ON recall_references (user_id, answer_turn_id)`,
+  ],
+}, {
+  version: 4,
+  statements: [
+    `ALTER TABLE recall_references ADD COLUMN history_only boolean NOT NULL DEFAULT true`,
+  ],
 }];
 
 export async function migrate(db: StoreDatabase): Promise<void> {

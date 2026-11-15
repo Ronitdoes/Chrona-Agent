@@ -9,12 +9,18 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:stop": "docker compose stop postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "db:test:up": "docker compose --profile test up -d --wait postgres-test",
+    "db:test:down": "docker compose --profile test rm -s -f postgres-test",
     "search:smoke": "vitest run --config scripts/search-smoke.config.mts",
-    "search:live-smoke": "vitest run --config scripts/live-search-smoke.config.mts"
+    "search:live-smoke": "vitest run --config scripts/live-search-smoke.config.mts",
+    "recall:live-eval": "vitest run --config scripts/recall-live-eval.config.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
-    "@electric-sql/pglite": "^0.5.16",
     "chrono-node": "^2.10.3",
     "drizzle-orm": "^0.45.4",
     "lru-cache": "^11.5.3",

@@ -59,6 +59,7 @@ it.each(["", "unused-anthropic-key"])("curates with the configured Gemini provid
   vi.stubEnv("GEMINI_MODEL", "gemini-3.5-flash-lite");
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   vi.stubEnv("ANTHROPIC_API_KEY", anthropicKey);
+  vi.stubEnv("DATABASE_URL", "postgresql://test@localhost/test");
   const fetch = vi.fn<typeof globalThis.fetch>(async () => geminiCompletion(JSON.stringify(output)));
   vi.stubGlobal("fetch", fetch);
   const store = {
@@ -79,6 +80,7 @@ it("keeps Haiku for the Anthropic provider even when a Gemini key is present", a
   vi.stubEnv("MODEL_PROVIDER", "anthropic");
   vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test-key");
   vi.stubEnv("GEMINI_API_KEY", "unused-gemini-key");
+  vi.stubEnv("DATABASE_URL", "postgresql://test@localhost/test");
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   const fetch = vi.fn<typeof globalThis.fetch>(async () => response(JSON.stringify(output)));
   vi.stubGlobal("fetch", fetch);

@@ -96,7 +96,7 @@ describe("deterministic recall", () => {
     vi.mocked(store.turnsInRange).mockResolvedValue([turn(1, { content: "x".repeat(2000) })]);
     vi.mocked(store.memoryFor).mockResolvedValue([memory({ userId: "bob" })]);
     vi.mocked(store.threadsFor).mockResolvedValue([thread({ userId: "bob" })]);
-    const found = await retrieve({ userId: "alice", text: "Monday", now: clock, maxTokens: 512 }, { store });
+    const found = await retrieve({ userId: "alice", text: "Monday", now: clock, maxBytes: 512 }, { store });
     expect(found.notFound).toBe(false);
     expect(found.truncated).toBe(true);
     expect(found.turns).toEqual([]);

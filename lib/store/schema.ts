@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { SearchResult } from "../tools/results";
 import {
-  bigint, bigserial, check, customType, index, jsonb, pgTable,
+  bigint, bigserial, boolean, check, customType, index, jsonb, pgTable,
   primaryKey, text, timestamp, type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -73,3 +73,12 @@ export const curations = pgTable("curations", {
   evidence: jsonb("evidence").$type<SearchResult[]>().notNull(),
   completed: timestamp("completed", { withTimezone: true }),
 }, (table) => [index("curations_pending").on(table.userId, table.turnId).where(sql`${table.completed} is null`)]);
+
+// An empty list records an unsuccessful recall and blocks stale antecedents.
+export const recallReferences = pgTable("recall_references", {
+  answerTurnId: bigint("answer_turn_id", { mode: "number" }).primaryKey().references(() => turns.id, { onDelete: "cascade" }),
+  requestTurnId: bigint("request_turn_id", { mode: "number" }).notNull().references(() => turns.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull(),
+  sourceTurnIds: jsonb("source_turn_ids").$type<number[]>().notNull(),
+  historyOnly: boolean("history_only").notNull(),
+}, table => [index("recall_references_user_answer").on(table.userId, table.answerTurnId)]);

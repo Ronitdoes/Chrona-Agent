@@ -34,7 +34,7 @@ yarn-error.log*
 .env*
 !.env.example
 
-# local data (embedded PGlite)
+# local data, database backups and transfer exports
 data/
 
 # vercel

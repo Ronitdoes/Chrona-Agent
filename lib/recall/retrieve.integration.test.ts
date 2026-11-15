@@ -1,12 +1,12 @@
+import { createTestStore } from "../../test/database";
 import { expect, it } from "vitest";
-import { createStore } from "../store";
 import { claims } from "../store/schema";
 import { dateFrom } from "../clock";
 import { clock } from "../../test/agent-fixtures";
 import { retrieve } from "./retrieve";
 
-it("retrieves dated pairs and cross-session keyword context from real PGlite, scoped to the user", async () => {
-  const store = await createStore({ dataDir: ":memory:", clock: () => clock });
+it("retrieves dated pairs and cross-session keyword context from real Postgres, scoped to the user", async () => {
+  const store = await createTestStore({ clock: () => clock });
   try {
     await store.saveTurn({ userId: "alice", sessionId: "one", role: "user", content: "Compare CRM pricing", ts: dateFrom("2026-11-09T12:00:00Z") });
     const answer = await store.saveTurn({ userId: "alice", sessionId: "one", role: "assistant", content: "HubSpot CRM costs $20/seat/mo", ts: dateFrom("2026-11-09T12:00:01Z") });
