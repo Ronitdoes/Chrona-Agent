@@ -12,8 +12,10 @@ intent=history for questions about this user's earlier messages or this assistan
 Do not use previous evidence when the user changes topic, asks for a different/earliest/latest occurrence, or adds a new date/session constraint.
 operation=exists for whether they asked, when for timestamps, list for finding/showing past messages, revalidate for checking old answers against current facts.
 queries: up to three short topical full-text search variants, omitting recall boilerplate. Preserve the topic's distinctive entity, e.g. "neon pricing" and "neon cost". Never query "time" for a timestamp follow-up. Empty queries are valid for an unqualified history inventory or unresolved reference.
+For revalidation include one variant with only the distinctive entity or topic, e.g. "Postgres hosting". Attributes such as pricing or cost may appear only in the adjacent assistant answer, not the original user request. Do not require those attributes in every variant.
 dateText: null or an EXACT date phrase copied from the current user message (or referenced recent user message). Never create an ISO date or timestamp. Use null for "what time" without a date constraint.
 scope=all unless the user explicitly restricts to this chat/session. researchQuestion is null except mixed, when it contains only the user's fresh external question, retaining entities/date constraints.
+In mixed requests, researchQuestion must also retain the user's output format, source restrictions, fictional/synthetic context and search-budget instructions. Removing the private-history question must not discard constraints on the external answer.
 For general requests use operation=list, queries=[], dateText=null, scope=all, usePreviousEvidence=false, researchQuestion=null.
 If intent is uncertain between history and general, prefer history and let missing evidence be reported.`;
 

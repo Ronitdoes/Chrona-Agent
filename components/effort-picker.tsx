@@ -3,12 +3,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Check, ChevronDown, Gauge } from "lucide-react";
 import { effortProfiles, effortSchema, type ResearchEffort } from "../lib/research-effort";
+import { useSmoothScroll } from "./smooth-scrolling";
 
 export function EffortPicker({ value, disabled, onChange }: { value: ResearchEffort; disabled: boolean; onChange: (effort: ResearchEffort) => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  useSmoothScroll(panel, content, open);
   const id = useId();
   useEffect(() => {
     if (!open) return;
@@ -25,7 +28,8 @@ export function EffortPicker({ value, disabled, onChange }: { value: ResearchEff
       onClick={() => setOpen(!open)} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground disabled:opacity-50">
       <Gauge size={13} aria-hidden="true" /><span>{effortProfiles[value].label}</span><ChevronDown size={11} aria-hidden="true" />
     </button>
-    {open ? <div ref={panel} id={id} role="dialog" aria-label="Research effort" className="chat-scroll absolute left-0 bottom-full z-40 mb-3 max-h-[60dvh] w-[min(270px,calc(100vw-80px))] overflow-y-auto rounded-2xl border border-border bg-surface p-2 shadow-[0_12px_40px_#0004]">
+    {open ? <div ref={panel} data-lenis-scroll id={id} role="dialog" aria-label="Research effort" className="chat-scroll absolute left-0 bottom-full z-40 mb-3 max-h-[60dvh] w-[min(270px,calc(100vw-80px))] overflow-y-auto rounded-2xl border border-border bg-surface p-2 shadow-[0_12px_40px_#0004]">
+      <div ref={content}>
       <p className="px-3 pt-2 pb-1 text-[10px] font-medium tracking-[0.08em] text-muted uppercase">Research effort</p>
       {effortSchema.options.map(effort => {
         const profile = effortProfiles[effort];
@@ -35,6 +39,7 @@ export function EffortPicker({ value, disabled, onChange }: { value: ResearchEff
         </button>;
       })}
       <p className="px-3 pt-1 pb-2 text-[10px] leading-relaxed text-muted">Source count depends on relevance and availability.</p>
+      </div>
     </div> : null}
   </div>;
 }

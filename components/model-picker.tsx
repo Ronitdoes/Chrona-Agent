@@ -2,6 +2,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, SlidersHorizontal } from "lucide-react";
 import { modelSelectionSchema, providerNames, type ModelCatalog, type ModelSelection } from "../lib/model-selection";
+import { useSmoothScroll } from "./smooth-scrolling";
 
 const descriptions = { anthropic: "Careful reasoning and detailed research", gemini: "Lightweight answers through Google AI Studio" };
 export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: ModelCatalog; value: ModelSelection; disabled: boolean; onChange: (value: ModelSelection) => void }) {
@@ -10,6 +11,8 @@ export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: M
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
+  useSmoothScroll(panel, content, open);
   const [custom, setCustom] = useState(false);
   const [draft, setDraft] = useState(value);
   const selected = catalog.providers.find(provider => provider.id === value.provider)?.models.find(model => model.id === value.model);
@@ -36,7 +39,8 @@ export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: M
       className="flex max-w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-50">
       <span className="max-w-52 truncate text-foreground">{selected?.name ?? value.model}</span><ChevronDown size={13} aria-hidden="true" />
     </button>
-    {open ? <div ref={panel} id={id} role="dialog" aria-label="Choose AI model" className="chat-scroll absolute right-0 bottom-full z-40 mb-3 max-h-[min(70dvh,480px)] w-[min(350px,calc(100vw-80px))] overflow-y-auto rounded-2xl border border-border bg-surface p-2 shadow-[0_12px_40px_#0004]">
+    {open ? <div ref={panel} data-lenis-scroll id={id} role="dialog" aria-label="Choose AI model" className="chat-scroll absolute right-0 bottom-full z-40 mb-3 max-h-[min(70dvh,480px)] w-[min(350px,calc(100vw-80px))] overflow-y-auto rounded-2xl border border-border bg-surface p-2 shadow-[0_12px_40px_#0004]">
+      <div ref={content}>
       {catalog.providers.map(provider => <section key={provider.id} aria-label={providerNames[provider.id]}>
         <p className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-[0.08em] text-muted uppercase">{providerNames[provider.id]}</p>
         {[...provider.models, ...(provider.id === value.provider && !provider.models.some(model => model.id === value.model) ? [{ id: value.model, name: value.model }] : [])].map(model => <button key={model.id} type="button" aria-pressed={provider.id === value.provider && model.id === value.model} onClick={() => choose({ provider: provider.id, model: model.id })}
@@ -52,6 +56,7 @@ export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: M
         <label className="block text-[11px] text-muted">Model ID<input aria-label="Custom model ID" value={draft.model} onChange={event => setDraft({ ...draft, model: event.target.value })} maxLength={120} autoComplete="off" spellCheck={false} className="mt-1.5 block w-full rounded-lg border border-border bg-background px-2 py-2 text-xs text-foreground" /></label>
         <button type="button" disabled={!modelSelectionSchema.safeParse(draft).success} onClick={() => choose(draft)} className="rounded-lg bg-surface-2 px-3 py-2 text-xs disabled:opacity-50">Use model</button>
       </div> : null}
+      </div>
     </div> : null}
   </div>;
 }

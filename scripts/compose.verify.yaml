@@ -1,0 +1,29 @@
+services:
+  database:
+    image: postgres:18
+    command: ["postgres", "-p", "5433"]
+    environment:
+      POSTGRES_USER: chrona_test
+      POSTGRES_PASSWORD: chrona_test_local
+      POSTGRES_DB: chrona_test
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -p 5433 -U chrona_test -d chrona_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  verify:
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile.verify
+    network_mode: service:database
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      MODEL_PROVIDER: gemini
+      GEMINI_API_KEY: synthetic-no-provider-requests
+      TAVILY_API_KEY: synthetic-no-search-requests
+      DATABASE_URL: postgresql://chrona_test:chrona_test_local@127.0.0.1:5433/chrona_shipping
+      TEST_DATABASE_URL: postgresql://chrona_test:chrona_test_local@127.0.0.1:5433/chrona_test

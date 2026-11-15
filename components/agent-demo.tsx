@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Play, RotateCcw } from "lucide-react";
 import { createDemoRequest, demoMessages, demoSearches, demoSources, type DemoScenario } from "../lib/demo-chat";
@@ -9,11 +9,15 @@ import { MessageList } from "./message-list";
 import { SearchStatus } from "./search-status";
 import { SourceChips } from "./source-chips";
 import { AsOfChip, VerdictBadge } from "./research-badges";
+import { useSmoothScroll } from "./smooth-scrolling";
 
 export function AgentDemo() {
   const [view, setView] = useState<"components" | "stream">("components");
   const [scenario, setScenario] = useState<DemoScenario>("comparison");
   const [replay, setReplay] = useState(0);
+  const viewport = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  useSmoothScroll(viewport, content, view === "components");
   const request = useMemo(() => createDemoRequest(scenario), [scenario]);
   const running = [{ ...demoSearches[0], state: "running" as const, count: 0 }];
   return (
@@ -41,7 +45,8 @@ export function AgentDemo() {
           <p className="w-full text-[11px] text-muted">Send any message to play this local scenario.</p>
         </div>
         <Chat key={`${scenario}:${replay}`} request={request} localSources />
-      </> : <div className="chat-scroll min-h-0 flex-1 space-y-9 overflow-y-auto overscroll-contain pt-6 pb-8" tabIndex={0} role="region" aria-label="Component examples">
+      </> : <div ref={viewport} data-lenis-scroll className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain" tabIndex={0} role="region" aria-label="Component examples">
+        <div ref={content} className="space-y-9 pt-6 pb-8">
         <section aria-labelledby="demo-searches"><h2 id="demo-searches" className="mb-3 text-sm font-medium">Search activity</h2>
           <SearchStatus searches={running} state="streaming" />
           <SearchStatus searches={demoSearches} state="complete" />
@@ -61,6 +66,7 @@ export function AgentDemo() {
         <section aria-labelledby="demo-answer"><h2 id="demo-answer" className="border-b border-border pb-3 text-sm font-medium">A complete sample conversation</h2>
           <MessageList messages={demoMessages} busy={false} localSources />
         </section>
+        </div>
       </div>}
     </div>
   );

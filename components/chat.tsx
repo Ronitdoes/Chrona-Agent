@@ -11,6 +11,7 @@ import type { ModelCatalog, ModelSelection } from "../lib/model-selection";
 import { ModelPicker } from "./model-picker";
 import { EffortPicker } from "./effort-picker";
 import type { ResearchEffort } from "../lib/research-effort";
+import { useSmoothScroll } from "./smooth-scrolling";
 
 type ActiveRequest = { id: string; controller: AbortController; flush: () => void; cancelFrame: () => void };
 
@@ -27,18 +28,22 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
   const [showJump, setShowJump] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const smoothScroll = useSmoothScroll(viewport, content);
   const following = useRef(true);
   const previousTop = useRef(0);
   const active = useRef<ActiveRequest | null>(null);
   const busy = state.activeId !== null;
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
 
-  const scrollToLatest = useCallback(() => {
+  const scrollToLatest = useCallback((animate = false) => {
     const element = viewport.current;
     if (!element) return;
-    element.scrollTop = element.scrollHeight;
+    if (smoothScroll.current) {
+      smoothScroll.current.resize();
+      smoothScroll.current.scrollTo("bottom", { immediate: !animate });
+    } else element.scrollTop = element.scrollHeight;
     previousTop.current = element.scrollTop;
-  }, []);
+  }, [smoothScroll]);
   useLayoutEffect(() => { if (following.current) scrollToLatest(); }, [state.messages, scrollToLatest]);
   useEffect(() => {
     const observer = new ResizeObserver(() => { if (following.current) scrollToLatest(); });
@@ -110,7 +115,8 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
 
   return (
     <div className={`relative flex min-h-0 flex-1 flex-col ${state.messages.length ? "" : "justify-center"}`}>
-      <div ref={viewport} tabIndex={0} role="region" aria-label="Messages" className={`chat-scroll min-h-0 overflow-y-auto overscroll-contain pr-1 ${state.messages.length ? "flex-1" : "shrink"}`}
+      <div ref={viewport} data-lenis-scroll tabIndex={0} role="region" aria-label="Messages" className="chat-scroll min-h-0 overflow-y-auto overscroll-contain"
+        style={{ flex: state.messages.length ? "1 1 0%" : "0 1 auto" }}
         onWheel={(event) => { if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) following.current = false; }}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -132,7 +138,7 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
           )}
         </div>
       </div>
-      {showJump ? <button type="button" onClick={() => { following.current = true; scrollToLatest(); setShowJump(false); }}
+      {showJump ? <button type="button" onClick={() => { following.current = true; scrollToLatest(true); setShowJump(false); }}
         className="absolute right-2 bottom-40 z-10 flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-sm"
         aria-label="Jump to latest message"><ArrowDown size={14} aria-hidden="true" />Jump to latest</button> : null}
       {notice ? <p role="status" className="mt-2 text-xs leading-relaxed text-muted">{notice}</p> : null}

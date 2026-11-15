@@ -1,6 +1,38 @@
-# Conversation recall hallucination audit
+# Historical conversation recall audit
 
-Audited 15 November 2026 against the working tree and the supplied screenshot. The findings below describe the pre-implementation snapshot. The subsequent [implementation and validation](MEMORY_RECALL.md) now address the history-answer path. The working tree already contained extensive uncommitted changes, which were preserved.
+Audited 15 November 2026 against the working tree and the supplied screenshot.
+This is a historical record of the pre-remediation snapshot, not the current
+runtime specification. Source-line references, reproduced defects, infrastructure
+and recommendations below refer to that snapshot. The audit's temporary tests
+were removed because they asserted the old defects. Current behavior is described
+in the [recall contract](MEMORY_RECALL.md), [architecture](ARCHITECTURE.md) and
+[design decisions](DESIGN.md).
+
+## Current resolution status
+
+| Historical concern | Current behavior and evidence |
+|---|---|
+| Keyword-only intent and pronoun handling | Structured planning classifies history/general/mixed intent and resolves bounded references |
+| Assistant assertions or summaries treated as proof | Original user-message candidates, exact quote/ID checks and deterministic history rendering |
+| Recall questions confirming themselves | History-only requests are excluded from subsequent topical history searches |
+| Missing timestamp antecedents or deleted sources | Persisted source references are rehydrated and rechecked for ownership, scope and deletion |
+| Oversized assistant text removing all user evidence | User-first history candidates retain relevant original excerpts independently of answer size |
+| Unreported retrieval omissions | Bounded pages and explicit candidate coverage; misses do not establish that the user never asked |
+| Private-history questions drifting into web research | History-only routing skips web search and answer synthesis; mixed requests keep evidence sections separate |
+| Query variants requiring attributes absent from the user message | Revalidation guidance includes a topic-only variant; mixed planning preserves answer/source/budget constraints |
+| Limited regression and latency evidence | Full Postgres suite, five deterministic evaluation cases, focused recall checks and a restricted Gemini live fixture |
+| Former embedded storage and a temporary CSS build failure | One node-postgres driver with Docker Postgres locally; regular Turbopack production build now passes |
+
+The historical audit used PGlite; current runtime, integration tests and evals use
+real Postgres, with no embedded fallback or dependency. Current validation records
+570 passing source tests, deterministic evaluations, clean Linux source-snapshot
+verification, and subsequent Lenis UI build/browser checks. These are regression
+results, not proof of general model accuracy. The original screenshot incident
+still cannot be reconstructed conclusively without its original saved turns and
+request trace. The recommendations that follow are retained as audit provenance;
+their implemented contract is documented in the current files linked above.
+
+## Historical context
 
 The screenshot demonstrates a confident recollection, followed by an unsupported reversal after a public web search. It does not establish whether the original Neon request was present in the database or what context the model received. No production conversation records, credentials, or live model requests were used in this audit. The findings below were reproduced with an isolated in-memory PGlite database and a scripted fake model where specified.
 

@@ -61,6 +61,14 @@ describe("history service on Postgres", () => {
     expect(answer.status).toBe("not_found"); expect(select).not.toHaveBeenCalled();
     expect(renderHistoryAnswer(answer, historyPlan(), clock)).toContain("doesn't establish that you never asked");
   });
+  it("finds the original topic when pricing terms occur only in its adjacent assistant answer", async () => {
+    const source = await save("Compare Postgres hosting from AlphaPG and BetaPG.");
+    await save("AlphaPG costs $10/month; BetaPG costs $15/month.", { role: "assistant", ts: dateFrom("2026-11-15T10:10:13Z") });
+    const answer = await run(historyPlan({ operation: "revalidate", queries: ["Postgres hosting pricing", "Postgres hosting cost", "Postgres hosting"] }));
+    expect(answer.status).toBe("matched");
+    expect(answer.matches.map(match => match.turn.id)).toEqual([source.id]);
+    expect(answer.context.some(turn => turn.role === "assistant" && turn.content.includes("$10/month"))).toBe(true);
+  });
   it("honors a semantic rejection of legacy meta, negated, quoted and hypothetical messages", async () => {
     for (const content of ["do you remember I asked for neon pricing", "I never asked for neon pricing", 'Example: "check neon pricing"', "If I asked for neon pricing, could you help?"]) await save(content);
     const select = vi.fn(async () => ({ status: "not_found" as const, matches: [] }));
