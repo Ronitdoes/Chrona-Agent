@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "search:smoke": "vitest run --config scripts/search-smoke.config.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

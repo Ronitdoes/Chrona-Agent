@@ -1,9 +1,23 @@
+import { z } from "zod";
+
+const instantSchema = z.iso.datetime({ offset: true });
+
+// Duration budgets must advance even when NOW_OVERRIDE fixes the calendar clock.
+export function monotonicMs(): number {
+  return performance.now();
+}
+
 export type Clock = {
   instant: Date;
   tz: string;
   iso: string;
   human: string;
 };
+
+// Explicit construction for calendar arithmetic and fixtures; never reads the clock.
+export function dateFrom(value: string | number): Date {
+  return new Date(value);
+}
 
 function assertTimeZone(tz: string): void {
   try {
@@ -14,13 +28,11 @@ function assertTimeZone(tz: string): void {
 }
 
 function parseNowOverride(raw: string): Date {
-  const parsed = new Date(raw);
-
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error("NOW_OVERRIDE must be a valid date");
+  if (!instantSchema.safeParse(raw).success) {
+    throw new Error("NOW_OVERRIDE must be a valid ISO timestamp with Z or an explicit offset");
   }
 
-  return parsed;
+  return dateFrom(raw);
 }
 
 export function now(tz: string = process.env.DEFAULT_TZ ?? "Asia/Kolkata"): Clock {

@@ -1,7 +1,9 @@
 import * as chrono from "chrono-node";
+import { dateFrom } from "../clock";
 
 export type DateRange = {
   startUtc: Date;
+  // Exclusive: use startUtc <= ts < endUtc in recall queries.
   endUtc: Date;
   label: string;
 };
@@ -86,7 +88,7 @@ function getLocalDate(instant: Date, tz: string): LocalDate {
 }
 
 function getOffsetMs(instant: Date, tz: string): number {
-  const truncated = new Date(Math.floor(instant.getTime() / 1000) * 1000);
+  const truncated = dateFrom(Math.floor(instant.getTime() / 1000) * 1000);
   const local = getZonedParts(truncated, tz);
   const localAsUtc = Date.UTC(
     local.day.year,
@@ -101,7 +103,7 @@ function getOffsetMs(instant: Date, tz: string): number {
 }
 
 function toUtcDate(day: LocalDate): Date {
-  return new Date(Date.UTC(day.year, day.month - 1, day.day));
+  return dateFrom(Date.UTC(day.year, day.month - 1, day.day));
 }
 
 function fromUtcDate(date: Date): LocalDate {
@@ -130,12 +132,12 @@ function zonedDateTimeToUtc(day: LocalDate, tz: string): Date {
   let utcMs = naive;
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    const next = naive - getOffsetMs(new Date(utcMs), tz);
+    const next = naive - getOffsetMs(dateFrom(utcMs), tz);
     if (next === utcMs) break;
     utcMs = next;
   }
 
-  return new Date(utcMs);
+  return dateFrom(utcMs);
 }
 
 function localDayRange(day: LocalDate, tz: string, label: string): DateRange {
@@ -229,13 +231,20 @@ function applyPastBias(
   return day;
 }
 
-function previousMonth(day: LocalDate, targetDay: number): LocalDate {
-  const firstOfPreviousMonth = new Date(Date.UTC(day.year, day.month - 2, 1));
-  const year = firstOfPreviousMonth.getUTCFullYear();
-  const month = firstOfPreviousMonth.getUTCMonth() + 1;
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+function mostRecentOrdinal(today: LocalDate, targetDay: number): LocalDate {
+  let month = { ...today, day: 1 };
 
-  return { year, month, day: Math.min(targetDay, lastDay) };
+  for (;;) {
+    const candidate = { ...month, day: targetDay };
+    // Skip months without this day rather than silently turning the 31st into the 30th.
+    if (
+      fromUtcDate(toUtcDate(candidate)).month === month.month &&
+      compareDays(candidate, today) <= 0
+    ) {
+      return candidate;
+    }
+    month = fromUtcDate(dateFrom(Date.UTC(month.year, month.month - 2, 1)));
+  }
 }
 
 function overlaps(
@@ -257,8 +266,7 @@ function addOrdinalFallbacks(
   results: ParsedResult[],
   candidates: Candidate[],
 ): void {
-  const ordinalPattern =
-    /\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/gi;
+  const ordinalPattern = /\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)\b/gi;
 
   for (const match of text.matchAll(ordinalPattern)) {
     const index = match.index ?? 0;
@@ -268,10 +276,7 @@ function addOrdinalFallbacks(
     if (targetDay < 1 || targetDay > 31) continue;
     if (overlaps(index, phrase.length, results)) continue;
 
-    let day: LocalDate = { year: today.year, month: today.month, day: targetDay };
-    if (compareDays(day, today) > 0) {
-      day = previousMonth(today, targetDay);
-    }
+    const day = mostRecentOrdinal(today, targetDay);
 
     candidates.push({
       ...localDayRange(day, tz, formatShortDate(day)),
@@ -286,6 +291,9 @@ export function resolveDates(
   tz: string,
 ): DateRange[] {
   assertTimeZone(tz);
+  if (!Number.isFinite(nowInstant.getTime())) {
+    throw new Error("Reference instant must be a valid date");
+  }
 
   const today = getLocalDate(nowInstant, tz);
   const offsetMinutes = Math.round(getOffsetMs(nowInstant, tz) / 60_000);
