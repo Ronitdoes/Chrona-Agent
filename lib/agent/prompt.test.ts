@@ -5,6 +5,31 @@ import { resolveDates } from "../recall/temporal";
 import { assemble } from "./prompt";
 
 describe("prompt assembly", () => {
+  it("anchors today to the user's calendar and requests named-month dates", () => {
+    const instant = dateFrom("2026-11-15T19:00:00Z");
+    const prompt = assemble({ clock: { ...clock, instant, tz: "Asia/Calcutta" }, recall: recall(), message: "ind vs nz match today" });
+    expect(prompt.system[1].text).toContain("Monday, 16 November 2026; today=2026-11-16");
+    expect(prompt.system[1].text).toContain("timezone=Asia/Calcutta");
+    expect(prompt.system[0].text).toContain("A match that finished earlier today is still a match played today");
+    expect(prompt.system[1].text).toContain("D Month YYYY");
+    expect(prompt.clock.instant).toBe(instant);
+  });
+  it("preserves both interpretations of an ambiguous user date for clarification", () => {
+    const prompt = assemble({ clock, recall: recall(), message: "my questions on 05/06/2026" });
+    expect(prompt.system[1].text).toContain("AMBIGUOUS REQUEST DATES");
+    expect(prompt.system[1].text).toContain("5 June 2026");
+    expect(prompt.system[1].text).toContain("6 May 2026");
+  });
+  it("keeps an upcoming fixture date separate from past-biased recall dates", () => {
+    const prompt = assemble({ clock, recall: recall({ resolvedRanges: resolveDates("18 November", clock.instant, "UTC") }), message: "next India vs New Zealand match on 18 November" });
+    expect(prompt.system[1].text).toContain("REQUESTED DATES FOR THIS QUESTION: 18 Nov 2026");
+    expect(prompt.system[1].text).toContain("HISTORY LOOKUP DATES (past-biased for recall only, not an upcoming event schedule): 18 Nov 2025");
+  });
+  it("preserves historical dates when revalidating an earlier recommendation", () => {
+    const prompt = assemble({ clock, recall: recall({ resolvedRanges: resolveDates("Monday", clock.instant, "UTC") }), message: "Has our CRM shortlist from Monday changed?" });
+    expect(prompt.system[1].text).toContain("REQUESTED DATES FOR THIS QUESTION: Monday 9 Nov 2026");
+    expect(prompt.system[1].text).not.toContain("Monday 16 Nov 2026");
+  });
   it("keeps the cached prefix stable when only volatile context changes", () => {
     const input = { clock, recall: recall({ memory: [memory()] }), message: "Hello" };
     const first = assemble(input);

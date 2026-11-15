@@ -92,6 +92,12 @@ describe("POST SSE client", () => {
     expect(fetch).toHaveBeenCalledWith("/api/chat", expect.objectContaining({ method: "POST", credentials: "same-origin", signal, body: JSON.stringify({ message: "Hello", tz: "Asia/Kolkata" }) }));
   });
 
+  it("sends the selected research effort with the chat request", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(stream(done), { headers: { "Content-Type": "text/event-stream" } }));
+    await requestChat("Research this", { tz: "UTC", signal: new AbortController().signal, onEvent: vi.fn(), fetch, effort: "high" });
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toMatchObject({ message: "Research this", effort: "high" });
+  });
+
   it("surfaces safe HTTP errors and rejects non-SSE successful responses", async () => {
     for (const [response, expected] of [
       [Response.json({ error: { message: "Please wait." } }, { status: 429 }), "Please wait."],

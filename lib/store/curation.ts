@@ -4,7 +4,7 @@ import { dateFrom } from "../clock";
 import { keyOf, memoryKey, sameValue, supportingSources, validateExtraction } from "../curator/schema";
 import { revalidateClaim } from "../recall/diff";
 import { normalizePublishedDate } from "../tools/results";
-import type { StoreDatabase } from "./queries";
+import { USER_MEMORY_LOCK, type StoreDatabase } from "./queries";
 import { claims, curations, memory, threads, turns } from "./schema";
 
 const normalized = (column: AnyColumn) => sql`lower(regexp_replace(btrim(${column}), '[[:space:]]+', ' ', 'g'))`;
@@ -39,7 +39,7 @@ export function createCurationQueries(db: StoreDatabase) {
       requireUser(userId);
       return db.transaction(async (tx) => {
         // Serialize merges across sessions/instances; no network work happens under this lock.
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(781424, hashtext(${userId}))`);
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${USER_MEMORY_LOCK}, hashtext(${userId}))`);
         const [job] = await tx.select().from(curations)
           .where(and(eq(curations.userId, userId), eq(curations.turnId, turnId), isNull(curations.completed)));
         if (!job) return false;

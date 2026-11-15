@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, SlidersHorizontal } from "lucide-react";
 import { modelSelectionSchema, providerNames, type ModelCatalog, type ModelSelection } from "../lib/model-selection";
 
-const descriptions = { anthropic: "Careful reasoning and detailed research", groq: "Fast answers through Groq", gemini: "Lightweight answers through Google AI Studio" };
+const descriptions = { anthropic: "Careful reasoning and detailed research", gemini: "Lightweight answers through Google AI Studio" };
 export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: ModelCatalog; value: ModelSelection; disabled: boolean; onChange: (value: ModelSelection) => void }) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -13,6 +13,14 @@ export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: M
   const [custom, setCustom] = useState(false);
   const [draft, setDraft] = useState(value);
   const selected = catalog.providers.find(provider => provider.id === value.provider)?.models.find(model => model.id === value.model);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const fit = () => { if (panel.current && root.current) panel.current.style.maxHeight = `${Math.max(100, Math.min(innerHeight * 0.7, root.current.getBoundingClientRect().top - 20))}px`; };
+    fit(); window.addEventListener("resize", fit);
+    const observer = new ResizeObserver(fit);
+    if (root.current?.closest("form")) observer.observe(root.current.closest("form")!);
+    return () => { window.removeEventListener("resize", fit); observer.disconnect(); };
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     panel.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus();
@@ -31,7 +39,7 @@ export function ModelPicker({ catalog, value, disabled, onChange }: { catalog: M
     {open ? <div ref={panel} id={id} role="dialog" aria-label="Choose AI model" className="chat-scroll absolute right-0 bottom-full z-40 mb-3 max-h-[min(70dvh,480px)] w-[min(350px,calc(100vw-80px))] overflow-y-auto rounded-2xl border border-border bg-surface p-2 shadow-[0_12px_40px_#0004]">
       {catalog.providers.map(provider => <section key={provider.id} aria-label={providerNames[provider.id]}>
         <p className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-[0.08em] text-muted uppercase">{providerNames[provider.id]}</p>
-        {provider.models.map(model => <button key={model.id} type="button" aria-pressed={provider.id === value.provider && model.id === value.model} onClick={() => choose({ provider: provider.id, model: model.id })}
+        {[...provider.models, ...(provider.id === value.provider && !provider.models.some(model => model.id === value.model) ? [{ id: value.model, name: value.model }] : [])].map(model => <button key={model.id} type="button" aria-pressed={provider.id === value.provider && model.id === value.model} onClick={() => choose({ provider: provider.id, model: model.id })}
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-surface-2">
           <span className="min-w-0 flex-1"><span className="block truncate text-sm">{model.name}</span><span className="mt-1 block text-[11px] leading-relaxed text-muted">{provider.available ? descriptions[provider.id] : "Add your API key to enable"}</span></span>
           {provider.id === value.provider && model.id === value.model ? <Check size={17} className="shrink-0 text-accent-ink" aria-hidden="true" /> : null}

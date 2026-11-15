@@ -1,15 +1,14 @@
 export type ModelFailure = {
-  provider: "groq" | "gemini" | "unknown";
+  provider: "gemini" | "unknown";
   kind: "rate_limit" | "tool_generation" | "authentication" | "invalid_request" | "request_size" | "unavailable" | "network" | "stream" | "cancelled" | "unknown";
   status?: number;
   retryAfterMs?: number;
-  inputTokenLimit?: number;
 };
 
 // Carries only allowlisted diagnostics, never a provider body, prompt, URL or API key.
 export class ModelProviderError extends Error {
   constructor(readonly failure: ModelFailure) {
-    super(failure.kind === "cancelled" ? "Model request cancelled" : failure.provider === "gemini" ? "Gemini response failed" : "Groq response failed");
+    super(failure.kind === "cancelled" ? "Model request cancelled" : failure.provider === "gemini" ? "Gemini response failed" : "Model response failed");
     this.name = "ModelProviderError";
   }
 }
@@ -20,26 +19,12 @@ export function retryAfterMs(value: string | null): number | undefined {
   return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 }
 
-// Extract only the numeric input quota; provider messages may contain org IDs,
-// prompts or credentials and must never become diagnostics or instructions.
-export function inputTokenLimit(body: unknown): number | undefined {
-  if (!body || typeof body !== "object" || !("error" in body)) return;
-  const error = body.error;
-  if (!error || typeof error !== "object" || !("code" in error) || error.code !== "rate_limit_exceeded" ||
-    !("message" in error) || typeof error.message !== "string") return;
-  const match = /\bITPM\):\s*Limit\s+(\d+),\s*Requested\s+(\d+)\b/i.exec(error.message);
-  if (!match) return;
-  const limit = Number(match[1]);
-  const requested = Number(match[2]);
-  return Number.isSafeInteger(limit) && limit >= 512 && limit <= 1_000_000 && Number.isSafeInteger(requested) && requested > limit ? limit : undefined;
-}
-
 export function modelFailure(error: unknown): ModelFailure {
   return error instanceof ModelProviderError ? error.failure : { provider: "unknown", kind: "unknown" };
 }
 
 export function recoveryDelay(failure: ModelFailure): number | null {
-  if (failure.kind === "request_size") return failure.provider === "groq" && failure.status === 413 ? 0 : null;
+  if (failure.kind === "request_size") return null;
   if (failure.kind === "rate_limit") return failure.retryAfterMs ?? null;
   return ["tool_generation", "unavailable", "network", "stream"].includes(failure.kind) ? 0 : null;
 }

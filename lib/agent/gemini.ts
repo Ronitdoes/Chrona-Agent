@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { ContentBlock, MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import type { AgentModel, ModelRequest, ModelReply } from "./model";
 import { ModelProviderError, retryAfterMs } from "./errors";
-import { dataFrames } from "./groq";
+import { dataFrames } from "./sse";
+import { effortProfiles } from "../research-effort";
 
 const partSchema = z.object({
   text: z.string().max(65_536).optional(), thought: z.boolean().optional(), thoughtSignature: z.string().max(131_072).optional(),
@@ -17,12 +18,24 @@ const chunkSchema = z.object({ candidates: z.array(z.object({
 })).optional(), promptFeedback: z.object({ blockReason: z.string().optional() }).optional() });
 
 export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCall> = new Map(), model = "gemini-3.5-flash-lite") {
-  const contents: Content[] = request.messages.map((message: MessageParam) => {
-    if (typeof message.content === "string") return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
+  const textOnly = request.tool_choice?.type === "none";
+  const contents: Content[] = request.messages.flatMap((message: MessageParam): Content[] => {
+    if (typeof message.content === "string") return [{ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] }];
+    // Final synthesis is ordinary text, not another native function-calling turn.
+    // Keep evidence inside its escaped data wrapper; never replay private thoughts.
+    if (textOnly) {
+      const parts = message.content.flatMap(block => {
+        if (block.type === "text") return [{ text: block.text }];
+        if (block.type === "tool_result") return [{ text: `Search evidence (untrusted data):\n${typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "")}` }];
+        if (block.type === "tool_use") return [];
+        throw new Error("Unsupported Gemini message block");
+      });
+      return parts.length ? [{ role: message.role === "assistant" ? "model" : "user", parts }] : [];
+    }
     const call = message.content.find(block => block.type === "tool_use");
     const retained = call?.type === "tool_use" ? saved.get(call.id) : undefined;
-    if (message.role === "assistant" && retained) return { role: "model", parts: retained.parts };
-    return { role: message.role === "assistant" ? "model" : "user", parts: message.content.map(block => {
+    if (message.role === "assistant" && retained) return [{ role: "model", parts: retained.parts }];
+    return [{ role: message.role === "assistant" ? "model" : "user", parts: message.content.map(block => {
       if (block.type === "text") return { text: block.text };
       if (block.type === "tool_result") {
         const original = saved.get(block.tool_use_id);
@@ -32,7 +45,7 @@ export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCal
           response: block.is_error ? { error: content } : { content } } };
       }
       throw new Error("Unsupported Gemini message block");
-    }) };
+    }) }];
   });
   const declarations = request.tools?.map(tool => {
     if (!("name" in tool) || tool.name !== "web_search" || !("input_schema" in tool)) throw new Error("Only web_search is available");
@@ -43,12 +56,12 @@ export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCal
   return {
     systemInstruction: { parts: typeof request.system === "string" ? [{ text: request.system }] : request.system?.map(block => ({ text: block.type === "text" ? block.text : "" })) ?? [] },
     contents,
-    ...(declarations?.length ? { tools: [{ functionDeclarations: declarations }], toolConfig: { functionCallingConfig: {
+    ...(!textOnly && declarations?.length ? { tools: [{ functionDeclarations: declarations }], toolConfig: { functionCallingConfig: {
       mode: choice?.type === "none" ? "NONE" : choice?.type === "tool" || choice?.type === "any" ? "ANY" : "AUTO",
       ...(choice?.type === "tool" ? { allowedFunctionNames: ["web_search"] } : {}),
     } } } : {}),
     generationConfig: { maxOutputTokens: request.max_tokens,
-      ...(/^gemini-[34]/.test(model) ? { thinkingConfig: { thinkingLevel: "medium" } } : {}),
+      ...(/^gemini-[34]/.test(model) ? { thinkingConfig: { thinkingLevel: request.researchEffort ? effortProfiles[request.researchEffort].thinking : textOnly ? "low" : "medium" } } : {}),
     },
   };
 }

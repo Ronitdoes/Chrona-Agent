@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { dateFrom } from "../clock";
 import type { ProviderResult } from "./providers/types";
+import { normalizeDateLiterals } from "../calendar-context";
 
 // Conservative, server-owned identity hints. Unknown vendors stay unclassified.
 const vendors: [RegExp, string][] = [
@@ -25,6 +26,7 @@ export type SearchResult = {
   snippet: string;
   content?: string;
   is_official: boolean;
+  retrieved_at?: string;
 };
 
 const isoDay = z.iso.date();
@@ -32,10 +34,12 @@ const isoInstant = z.iso.datetime({ offset: true });
 
 export function normalizePublishedDate(raw?: string | null): string | null {
   if (!raw) return null;
+  const prepared = normalizeDateLiterals(raw);
+  if (prepared.ambiguous.length || prepared.invalid.length) return null;
   // Provider timestamps must have a zone; local datetimes would depend on the host.
   const explicitZone = /(?:\b(?:GMT|UTC)(?:[+-]\d{4})?|[+-]\d{4})$/i.test(raw);
-  if (!isoDay.safeParse(raw).success && !isoInstant.safeParse(raw).success && !explicitZone) return null;
-  const date = dateFrom(raw);
+  if (!isoDay.safeParse(prepared.normalized).success && !isoInstant.safeParse(prepared.normalized).success && !explicitZone) return null;
+  const date = dateFrom(prepared.normalized);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
@@ -53,7 +57,7 @@ export function canonicalUrl(raw: string): string | undefined {
   } catch { return; }
 }
 
-export function normalizeResults(raw: ProviderResult[], domains: string[], preferOfficial: boolean, deep: boolean): SearchResult[] {
+export function normalizeResults(raw: ProviderResult[], domains: string[], preferOfficial: boolean, deep: boolean, preserveRelevance = false): SearchResult[] {
   const results = new Map<string, SearchResult>();
   for (const item of raw) {
     const url = canonicalUrl(item.url);
@@ -76,8 +80,8 @@ export function normalizeResults(raw: ProviderResult[], domains: string[], prefe
   }
   return [...results.values()].sort((a, b) =>
     (preferOfficial ? Number(b.is_official) - Number(a.is_official) : 0) ||
-    Number(Boolean(b.published_date)) - Number(Boolean(a.published_date)) ||
-    (b.published_date ?? "").localeCompare(a.published_date ?? ""),
+    (preserveRelevance ? 0 : Number(Boolean(b.published_date)) - Number(Boolean(a.published_date)) ||
+      (b.published_date ?? "").localeCompare(a.published_date ?? "")),
   ).slice(0, 5);
 }
 

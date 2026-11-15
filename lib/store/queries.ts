@@ -8,6 +8,7 @@ import { claims, curations, memory, threads, turns } from "./schema";
 import type { SearchResult } from "../tools/results";
 
 export type StoreDatabase = NodePgDatabase<typeof schema> | PgliteDatabase<typeof schema>;
+export const USER_MEMORY_LOCK = 781424;
 export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionId" | "role" | "content"> & {
   ts?: Date;
   tz?: string;
@@ -28,6 +29,40 @@ function boundedLimit(limit: number): number {
 
 export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
   return {
+    async deleteConversation(userId: string, sessionId: string): Promise<boolean> {
+      scopedUser(userId);
+      if (!sessionId.trim()) throw new Error("A sessionId is required");
+      return db.transaction(async tx => {
+        // Share the curator's lock: a delayed extraction cannot recreate notes
+        // after the conversation and its pending extraction jobs are removed.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${USER_MEMORY_LOCK}, hashtext(${userId}))`);
+        const owned = await tx.select({ id: turns.id }).from(turns).where(and(eq(turns.userId, userId), eq(turns.sessionId, sessionId)));
+        if (!owned.length) return false;
+        const ids = owned.map(turn => turn.id);
+        const linked = await tx.select({ id: claims.id }).from(claims).where(and(eq(claims.userId, userId), inArray(claims.turnId, ids)));
+        if (linked.length) await tx.update(claims).set({ supersededBy: null }).where(and(eq(claims.userId, userId), inArray(claims.supersededBy, linked.map(claim => claim.id))));
+        await tx.delete(claims).where(and(eq(claims.userId, userId), inArray(claims.turnId, ids)));
+        await tx.delete(memory).where(and(eq(memory.userId, userId), inArray(memory.sourceTurnId, ids)));
+        await tx.delete(threads).where(and(eq(threads.userId, userId), inArray(threads.sourceTurnId, ids)));
+        await tx.delete(curations).where(and(eq(curations.userId, userId), or(inArray(curations.turnId, ids), inArray(curations.userTurnId, ids))));
+        await tx.delete(turns).where(and(eq(turns.userId, userId), eq(turns.sessionId, sessionId)));
+        return true;
+      });
+    },
+
+    async userMessagesFor(userId: string, options: {
+      ranges?: { startUtc: Date; endUtc: Date }[]; before: HistoryCursor; limit?: number;
+    }) {
+      const limit = boundedLimit(options.limit ?? 200);
+      for (const range of options.ranges ?? []) if (!(range.startUtc.getTime() < range.endUtc.getTime())) throw new RangeError("History range must have valid start < end instants");
+      return db.select({ id: turns.id, userId: turns.userId, sessionId: turns.sessionId, content: turns.content, ts: turns.ts, tz: turns.tz })
+        .from(turns).where(and(
+          eq(turns.userId, scopedUser(userId)), eq(turns.role, "user"),
+          options.ranges?.length ? or(...options.ranges.map(range => and(gte(turns.ts, range.startUtc), lt(turns.ts, range.endUtc)))) : undefined,
+          or(lt(turns.ts, options.before.ts), and(eq(turns.ts, options.before.ts), lt(turns.id, options.before.id))),
+        )).orderBy(desc(turns.ts), desc(turns.id)).limit(limit + 1);
+    },
+
     async historyFor(userId: string, options: { sessionId?: string; before?: HistoryCursor; limit?: number } = {}) {
       const limit = boundedLimit(options.limit ?? 100);
       const cursor = options.before;

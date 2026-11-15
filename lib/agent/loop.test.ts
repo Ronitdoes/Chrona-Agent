@@ -7,6 +7,7 @@ import type { WebSearchResult } from "../tools/webSearch";
 import { runAgent } from "./loop";
 import { assemble } from "./prompt";
 import { sse, type AgentEvents, type SendEvent } from "./events";
+import { effortProfiles, effortSchema } from "../research-effort";
 
 type Captured = { [K in keyof AgentEvents]: { event: K; data: AgentEvents[K] } }[keyof AgentEvents];
 function setup(model: FakeModel) {
@@ -27,6 +28,57 @@ function toolResults(model: FakeModel, request: number): ToolResultBlockParam[] 
 afterEach(() => { vi.useRealTimers(); });
 
 describe("hand-written agent loop", () => {
+  it("repairs the screenshot's date/status contradiction before streaming it, within Instant's budget", async () => {
+    const contradictory = "There is no India vs New Zealand match being played today, Sunday, November 15, 2026. The 5th ODI took place earlier today.";
+    const corrected = "Today's India vs New Zealand match finished earlier today, 15 November 2026. It is no longer live. [Source](https://example.com/pricing)";
+    const model = new FakeModel([
+      { tools: [{ input: { queries: ["India New Zealand match 15 November 2026"] } }] },
+      { text: [contradictory] }, { text: [corrected] },
+    ]);
+    const options = setup(model);
+    const search = vi.fn(async () => response(["India New Zealand match 15 November 2026"]));
+    const result = await runAgent({ ...options, messages: [{ role: "user", content: "ind vs nz match today" }], search, effort: "instant", time: () => 0 });
+    expect(result.text).toBe(corrected);
+    expect(model.requests).toHaveLength(3);
+    expect(model.requests[2].tool_choice).toEqual({ type: "none" });
+    expect(search).toHaveBeenCalledOnce();
+    expect(JSON.stringify(options.events)).not.toContain("There is no India");
+    expect(options.events.filter(event => event.event === "done")).toHaveLength(1);
+    expect(options.events.filter(event => event.event === "error")).toHaveLength(0);
+  });
+
+  it("withholds repeatedly contradictory date claims and preserves the sources as unverified", async () => {
+    const contradictory = "No India vs New Zealand match today. The match finished earlier today.";
+    const model = new FakeModel([{ tools: [{ input: { queries: ["India NZ fixture today"] } }] }, { text: [contradictory] }, { text: [contradictory] }]);
+    const options = setup(model);
+    const result = await runAgent({ ...options, messages: [{ role: "user", content: "ind vs nz match today" }], search: async () => response(["India NZ fixture today"]), effort: "instant", time: () => 0 });
+    expect(result.text).not.toContain(contradictory);
+    expect(JSON.stringify(options.events)).not.toContain(contradictory);
+    expect(result.text).toContain("unverified");
+    expect(result.sources).toHaveLength(1);
+    expect(model.requests).toHaveLength(3);
+    expect(options.events.filter(event => event.event === "done")).toHaveLength(1);
+  });
+
+  it.each(effortSchema.options)("enforces %s effort across all query batches and model-visible sources", async effort => {
+    const profile = effortProfiles[effort];
+    const model = new FakeModel([
+      { tools: [{ input: { queries: Array.from({ length: 6 }, (_, i) => `Query ${i}`) } }] },
+      { tools: [{ input: { queries: Array.from({ length: 6 }, (_, i) => `Query ${i + 6}`) } }] },
+      { text: ["Verified findings from the retained sources."] },
+    ]);
+    const search = vi.fn(async (input: unknown) => ({ ...response([]), queries: (input as { queries: string[] }).queries.map(query => ({ query, results: Array.from({ length: 3 }, (_, index) => ({
+      title: `${query} source ${index}`, url: `https://example.com/${encodeURIComponent(query)}/${index}`, snippet: "Fixture evidence", published_date: null, is_official: false,
+    })) })) }));
+    const result = await runAgent({ ...setup(model), effort, search, time: () => 0 });
+    expect(result.searchCount).toBe(profile.maxQueries);
+    expect(result.sources).toHaveLength(profile.maxSources);
+    expect(result.evidence).toHaveLength(profile.maxSources);
+    expect(model.requests.every(request => request.researchEffort === effort)).toBe(true);
+    expect(model.requests.at(-1)?.tool_choice).toEqual({ type: "none" });
+    expect(model.requests[0].max_tokens).toBe(profile.outputTokens);
+  });
+
   it("requires web_search for a live score, then restores normal routing after results", async () => {
     const model = new FakeModel([{ tools: [{ input: { queries: ["IND NZ score"] } }] }, { text: ["The score could not be verified."] }]);
     const options = setup(model);
@@ -95,6 +147,52 @@ describe("hand-written agent loop", () => {
     expect(result.text).not.toContain("step limit");
     expect(result.limits).not.toContain("step limit");
     expect(options.events.filter((event) => event.event === "done")).toHaveLength(1);
+  });
+
+  it("finishes a score-today lookup after two fresh search passes without chasing more guesses", async () => {
+    const model = new FakeModel([
+      { tools: [{ input: { queries: ["IND NZ fixture today"] } }] },
+      { tools: [{ input: { queries: ["IND NZ scorecard"] } }] },
+      { text: ["The current score could not be verified; here are the relevant match pages."] },
+    ]);
+    const search = vi.fn(async (input: unknown, options: { fresh?: boolean }) => {
+      expect(options.fresh).toBe(true);
+      return response((input as { queries: string[] }).queries);
+    });
+    const result = await runAgent({ ...setup(model), messages: [{ role: "user", content: "ind vs nz score today" }], search, time: () => 0 });
+    expect(model.requests[0].tool_choice).toMatchObject({ type: "tool", name: "web_search" });
+    expect(model.requests[2].tool_choice).toEqual({ type: "none" });
+    expect(search.mock.calls).toHaveLength(2);
+    expect(result.text).not.toContain("step limit");
+  });
+
+  it("repairs one late search request within the model budget and never runs that search", async () => {
+    const model = new FakeModel([
+      { tools: [{ input: { queries: ["IND NZ score today"] } }] },
+      { tools: [{ input: { queries: ["IND NZ scorecard"] } }] },
+      { tools: [{ id: "late", input: { queries: ["Unnecessary guess"] } }] },
+      { text: ["The sources do not establish a current score. [Match page](https://example.com/pricing)"] },
+    ]);
+    const options = setup(model);
+    const search = vi.fn(async (input: unknown) => response((input as { queries: string[] }).queries));
+    const result = await runAgent({ ...options, messages: [{ role: "user", content: "ind vs nz score today" }], search, time: () => 0 });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(model.requests).toHaveLength(4);
+    expect(toolResults(model, 3)[0]).toMatchObject({ tool_use_id: "late", is_error: true });
+    expect(result.limits).not.toContain("step limit");
+    expect(options.events.filter(event => event.event === "error")).toHaveLength(0);
+    expect(options.events.filter(event => event.event === "done")).toHaveLength(1);
+  });
+
+  it("preserves useful source excerpts if the model keeps asking to search during final synthesis", async () => {
+    const model = new FakeModel(Array.from({ length: 4 }, (_, i) => ({ tools: [{ input: { queries: [`Score query ${i}`] } }] })));
+    const search = vi.fn(async (input: unknown) => response((input as { queries: string[] }).queries));
+    const result = await runAgent({ ...setup(model), messages: [{ role: "user", content: "ind vs nz score today" }], search, time: () => 0 });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(result.text).toContain("couldn't verify a current score");
+    expect(result.text).toContain("https://example.com/pricing");
+    expect(result.text).not.toContain("I couldn't complete an answer");
+    expect(result.text).not.toContain("Score query");
   });
 
   it("runs no more than ten queries and explicitly reports omitted queries", async () => {

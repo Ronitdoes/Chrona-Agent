@@ -23,8 +23,9 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Web Agent Core",
-  description: "A chat agent with deterministic recall and web-search verification.",
+  title: "Chrona",
+  description: "A time-aware research assistant for past conversations and present-day answers.",
+  icons: { icon: [{ url: "/chrona-logo.png", type: "image/png" }], apple: "/chrona-logo.png" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

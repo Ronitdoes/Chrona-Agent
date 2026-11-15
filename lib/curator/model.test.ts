@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { clock, turn } from "../../test/agent-fixtures";
 import { curate } from "./curate";
-import { configuredCuratorModel, createCuratorModel, createGroqCuratorModel, createGeminiCuratorModel } from "./model";
+import { configuredCuratorModel, createCuratorModel, createGeminiCuratorModel } from "./model";
 import type { CuratorInput } from "./schema";
 
 const input: CuratorInput = { user: turn(1), assistant: turn(2, { role: "assistant" }), evidence: [], memory: [], threads: [] };
@@ -22,9 +22,8 @@ function response(text: string, stop = "end_turn") {
     content: [{ type: "text", text }], stop_reason: stop, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 10 } }),
   { headers: { "content-type": "application/json" } });
 }
-function groqCompletion(text: string, finishReason = "stop", refusal: string | null = null) {
-  return new Response(JSON.stringify({ choices: [{ finish_reason: finishReason, message: { content: text, refusal } }] }),
-    { headers: { "content-type": "application/json" } });
+function geminiCompletion(text: string, finishReason = "STOP") {
+  return Response.json({ candidates: [{ finishReason, content: { parts: [{ text }] } }] });
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
@@ -53,14 +52,14 @@ it.each([
   await expect(createCuratorModel("test-key", { fetch })(input, new AbortController().signal)).rejects.toThrow();
 });
 
-it.each(["", "unused-anthropic-key"])("curates with the configured Groq provider regardless of the Anthropic key (%s)", async (anthropicKey) => {
+it.each(["", "unused-anthropic-key"])("curates with the configured Gemini provider regardless of the Anthropic key (%s)", async (anthropicKey) => {
   vi.resetModules();
-  vi.stubEnv("MODEL_PROVIDER", "groq");
-  vi.stubEnv("GROQ_API_KEY", "groq-test-key");
-  vi.stubEnv("GROQ_MODEL", "qwen/qwen3.8-27b");
+  vi.stubEnv("MODEL_PROVIDER", "gemini");
+  vi.stubEnv("GEMINI_API_KEY", "gemini-test-key");
+  vi.stubEnv("GEMINI_MODEL", "gemini-3.5-flash-lite");
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   vi.stubEnv("ANTHROPIC_API_KEY", anthropicKey);
-  const fetch = vi.fn<typeof globalThis.fetch>(async () => groqCompletion(JSON.stringify(output)));
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => geminiCompletion(JSON.stringify(output)));
   vi.stubGlobal("fetch", fetch);
   const store = {
     pendingCurations: vi.fn().mockResolvedValue([input]),
@@ -70,16 +69,16 @@ it.each(["", "unused-anthropic-key"])("curates with the configured Groq provider
   expect(store.applyCuration).toHaveBeenCalledWith("alice", input.assistant.id, output, clock.instant);
   expect(fetch).toHaveBeenCalledOnce();
   const [url, request] = fetch.mock.calls[0];
-  expect(url).toBe("https://api.groq.com/openai/v1/chat/completions");
-  expect(request?.headers).toMatchObject({ Authorization: "Bearer groq-test-key" });
-  expect(JSON.parse(String(request?.body))).toMatchObject({ model: "qwen/qwen3.8-27b", response_format: { type: "json_object" }, reasoning_effort: "none" });
+  expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent");
+  expect(request?.headers).toMatchObject({ "x-goog-api-key": "gemini-test-key" });
+  expect(JSON.parse(String(request?.body))).toMatchObject({ generationConfig: { responseMimeType: "application/json" } });
 });
 
-it("keeps Haiku for the Anthropic provider even when a Groq key is present", async () => {
+it("keeps Haiku for the Anthropic provider even when a Gemini key is present", async () => {
   vi.resetModules();
   vi.stubEnv("MODEL_PROVIDER", "anthropic");
   vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test-key");
-  vi.stubEnv("GROQ_API_KEY", "unused-groq-key");
+  vi.stubEnv("GEMINI_API_KEY", "unused-gemini-key");
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   const fetch = vi.fn<typeof globalThis.fetch>(async () => response(JSON.stringify(output)));
   vi.stubGlobal("fetch", fetch);
@@ -89,49 +88,48 @@ it("keeps Haiku for the Anthropic provider even when a Groq key is present", asy
   expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).model).toBe("claude-haiku-5-5");
 });
 
-it.each(["qwen/qwen3.8-27b", "custom-groq-model"])("sends a schema-guided Groq JSON request without tools (%s)", async (model) => {
-  const fetch = vi.fn<typeof globalThis.fetch>(async () => groqCompletion(JSON.stringify(output)));
-  expect(await createGroqCuratorModel("test-key", model, { fetch })(input, new AbortController().signal)).toEqual(output);
+it.each(["gemini-3.5-flash-lite", "custom-gemini-model"])("sends a schema-guided Gemini JSON request without tools (%s)", async (model) => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => geminiCompletion(JSON.stringify(output)));
+  expect(await createGeminiCuratorModel("test-key", model, { fetch })(input, new AbortController().signal)).toEqual(output);
   expect(fetch).toHaveBeenCalledOnce();
+  expect(String(fetch.mock.calls[0][0])).toContain(`${model}:generateContent`);
   const request = JSON.parse(String(fetch.mock.calls[0][1]?.body));
-  expect(request).toMatchObject({ model, stream: false, max_completion_tokens: 4096, response_format: { type: "json_object" } });
+  expect(request).toMatchObject({ generationConfig: { maxOutputTokens: 4096, responseMimeType: "application/json" } });
   expect(request.tools).toBeUndefined();
   expect(request.tool_choice).toBeUndefined();
-  expect(request.reasoning_effort).toBe(model.startsWith("qwen/") ? "none" : undefined);
-  expect(request.messages[0].content).toContain("untrusted data");
-  expect(request.messages[0].content).toContain('"sourceUrls"');
-  expect(request.messages[1]).toMatchObject({ role: "user", content: JSON.stringify(input) });
+  expect(request.systemInstruction.parts[0].text).toContain("untrusted data");
+  expect(request.generationConfig.responseJsonSchema).toHaveProperty("properties.claims");
+  expect(request.contents[0]).toMatchObject({ role: "user", parts: [{ text: JSON.stringify(input) }] });
 });
 
 it.each([
-  ["not-json", "stop", null],
-  [JSON.stringify({ claims: "invalid", memory: [], threads: [] }), "stop", null],
-  [JSON.stringify(output), "length", null],
-  [JSON.stringify(output), "content_filter", null],
-  [JSON.stringify(output), "stop", "Cannot comply"],
-  ["", "stop", null],
-])("rejects malformed, invalid, truncated or refused Groq output (%s, %s, %s)", async (text, stop, refusal) => {
-  const fetch = vi.fn<typeof globalThis.fetch>(async () => groqCompletion(text, stop, refusal));
-  await expect(createGroqCuratorModel("test-key", "qwen/qwen3.8-27b", { fetch })(input, new AbortController().signal))
-    .rejects.toThrow("Groq curator response failed");
+  ["not-json", "STOP"],
+  [JSON.stringify({ claims: "invalid", memory: [], threads: [] }), "STOP"],
+  [JSON.stringify(output), "MAX_TOKENS"],
+  [JSON.stringify(output), "SAFETY"],
+  ["", "STOP"],
+])("rejects malformed, invalid, truncated or blocked Gemini output (%s, %s)", async (text, stop) => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => geminiCompletion(text, stop));
+  await expect(createGeminiCuratorModel("test-key", "gemini-3.5-flash-lite", { fetch })(input, new AbortController().signal))
+    .rejects.toThrow("Gemini curator response failed");
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("sanitizes Groq HTTP failures without an automatic retry", async () => {
+it("sanitizes Gemini HTTP failures without an automatic retry", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response("private-provider-details", { status: 429 }));
-  await expect(createGroqCuratorModel("test-key", "qwen/qwen3.8-27b", { fetch })(input, new AbortController().signal))
-    .rejects.toThrow(/^Groq curator response failed$/);
+  await expect(createGeminiCuratorModel("test-key", "gemini-3.5-flash-lite", { fetch })(input, new AbortController().signal))
+    .rejects.toThrow(/^Gemini curator response failed$/);
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("does not send a cancelled Groq curator request", async () => {
+it("does not send a cancelled Gemini curator request", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>();
   const controller = new AbortController(); controller.abort();
-  await expect(createGroqCuratorModel("test-key", "qwen/qwen3.8-27b", { fetch })(input, controller.signal)).rejects.toThrow("cancelled");
+  await expect(createGeminiCuratorModel("test-key", "gemini-3.5-flash-lite", { fetch })(input, controller.signal)).rejects.toThrow("cancelled");
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it("aborts a running Groq curator request with the caller's signal", async () => {
+it("aborts a running Gemini curator request with the caller's signal", async () => {
   const controller = new AbortController();
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
     const signal = init?.signal;
@@ -139,7 +137,7 @@ it("aborts a running Groq curator request with the caller's signal", async () =>
     signal?.throwIfAborted();
     throw new Error("Expected cancellation");
   });
-  await expect(createGroqCuratorModel("test-key", "qwen/qwen3.8-27b", { fetch })(input, controller.signal)).rejects.toThrow("cancelled");
+  await expect(createGeminiCuratorModel("test-key", "gemini-3.5-flash-lite", { fetch })(input, controller.signal)).rejects.toThrow("cancelled");
   expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 });
 

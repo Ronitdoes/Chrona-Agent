@@ -15,7 +15,11 @@ it("uses the actual SDK stream parser with a mocked fetch, without calling a mod
   const result = await runAgent({
     system: [{ type: "text", text: "Answer concisely", cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: "Hello" }], model: createAnthropicModel("test-key", { fetch }), send: () => {},
+    effort: "high",
   });
   expect(fetch).toHaveBeenCalledOnce();
   expect(result.text).toBe("SDK streamed text");
+  const body = JSON.parse(String(fetch.mock.calls[0][1]?.body));
+  expect(body.output_config.effort).toBe("high");
+  expect(body).not.toHaveProperty("researchEffort");
 });

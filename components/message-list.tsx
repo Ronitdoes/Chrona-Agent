@@ -1,7 +1,8 @@
 "use client";
 
 import { memo } from "react";
-import { BookOpenText, CircleAlert, Square, RefreshCw } from "lucide-react";
+import { CircleAlert, Square, RefreshCw } from "lucide-react";
+import { AppLogo } from "./app-logo";
 import type { ChatMessage } from "../lib/chat-state";
 import { MarkdownMessage } from "./markdown-message";
 import { SearchStatus } from "./search-status";
@@ -14,9 +15,9 @@ const Message = memo(function Message({ message, localSources, onRetry }: { mess
     </article>
   );
   return (
-    <article aria-label="Web Agent response" className="min-w-0">
+    <article aria-label="Chrona response" className="min-w-0">
       <div className="mb-3 flex items-center gap-2 font-sans text-xs font-medium">
-        <BookOpenText size={18} strokeWidth={1.5} className="text-accent" aria-hidden="true" />Web Agent
+        <AppLogo size={23} />Chrona
       </div>
       <SearchStatus searches={message.searches ?? []} state={message.state} />
       <div className="assistant-prose">

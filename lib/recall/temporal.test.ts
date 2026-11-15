@@ -128,6 +128,20 @@ const cases = [
 ] as const;
 
 describe("resolveDates", () => {
+  it.each(["15/11/2026", "11/15/2026", "2026-11-15"])("resolves unambiguous numeric date %s consistently", text => {
+    expect(resolveDates(text, NOW, "Asia/Kolkata")[0].startUtc.toISOString()).toBe("2026-11-14T18:30:00.000Z");
+  });
+  it("does not silently choose US date order for an ambiguous numeric date", () => {
+    expect(resolveDates("05/06/2026", NOW, "UTC")).toEqual([]);
+    expect(resolveDates("31/02/2026", NOW, "UTC")).toEqual([]);
+    expect(resolveDates("DD/MM/YYYY 05/06/2026", NOW, "UTC")[0].label).toBe("5 Jun 2026");
+  });
+  it("preserves explicit future references while keeping recall's past bias separate", () => {
+    expect(resolveDates("tomorrow", NOW, "UTC")[0].startUtc.toISOString()).toBe("2026-11-16T00:00:00.000Z");
+    expect(resolveDates("next Wednesday", NOW, "UTC")[0].startUtc.toISOString()).toBe("2026-11-18T00:00:00.000Z");
+    expect(resolveDates("18 November", NOW, "UTC", "event")[0].startUtc.toISOString()).toBe("2026-11-18T00:00:00.000Z");
+    expect(resolveDates("18 November", NOW, "UTC")[0].startUtc.toISOString()).toBe("2025-11-18T00:00:00.000Z");
+  });
   it.each(cases)(
     "resolves $text in UTC",
     ({ text, utc }) => {

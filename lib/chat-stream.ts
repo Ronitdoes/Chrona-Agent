@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ModelSelection } from "./model-selection";
+import type { ResearchEffort } from "./research-effort";
 
 const count = z.number().int().nonnegative();
 export const chatEventSchema = z.discriminatedUnion("type", [
@@ -89,12 +90,12 @@ export async function readChatStream(body: ReadableStream<Uint8Array>, onEvent: 
 
 export async function requestChat(message: string, options: {
   tz: string; signal: AbortSignal; onEvent: (event: ChatEvent) => void; fetch?: typeof globalThis.fetch;
-  sessionId?: string; selection?: ModelSelection;
+  sessionId?: string; selection?: ModelSelection; effort?: ResearchEffort;
 }): Promise<void> {
   options.signal.throwIfAborted();
   const response = await (options.fetch ?? globalThis.fetch)("/api/chat", {
     method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, tz: options.tz, sessionId: options.sessionId, selection: options.selection }), signal: options.signal,
+    body: JSON.stringify({ message, tz: options.tz, sessionId: options.sessionId, selection: options.selection, effort: options.effort }), signal: options.signal,
   });
   if (!response.ok) {
     const fallback = response.status === 429 ? "Please wait a moment before sending another message." : "The message could not be sent. Please try again.";

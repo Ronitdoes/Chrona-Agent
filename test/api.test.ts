@@ -9,6 +9,7 @@ import { createRequestLimit } from "../lib/requestLimit";
 import { clock, FakeModel } from "./agent-fixtures";
 import { decodeCursor } from "../lib/history";
 import { curate } from "../lib/curator/curate";
+import { dateFrom } from "../lib/clock";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -31,7 +32,7 @@ describe("chat and history backend with real PGlite and fake model", () => {
       after: (task) => { tasks.push(task); }, store: async () => store,
       clock: () => clock, time: () => 0, trace: () => logger,
       acquire: createRequestLimit(() => 0),
-      resolveSelection: async requested => requested ?? { provider: "groq", model: "test-model" },
+      resolveSelection: async requested => requested ?? { provider: "gemini", model: "test-model" },
       curate: async () => ({ completed: 0, failed: 0, deferred: false }),
       run: (options) => {
         const model = new FakeModel([{ text: ["A short ", "answer."] }]);
@@ -78,6 +79,25 @@ describe("chat and history backend with real PGlite and fake model", () => {
     expect((await store.historyFor(userId)).length).toBe(before);
   });
 
+  it.each(["instant", "medium", "high"] as const)("passes %s research effort to the agent and safe trace", async effort => {
+    const run = vi.fn((options: Parameters<typeof runAgent>[0]) => runAgent({ ...options, model: new FakeModel([{ text: ["Effort answer."] }]) }));
+    const app = harness({ run });
+    await (await app.handler(post({ message: "Hello", effort }))).text();
+    expect(run.mock.calls[0][0].effort).toBe(effort);
+    await app.flush();
+    expect(app.logger.info.mock.calls[0][0]).toMatchObject({ effort });
+  });
+
+  it("defaults to medium effort and rejects unsupported effort before persisting", async () => {
+    const run = vi.fn((options: Parameters<typeof runAgent>[0]) => runAgent({ ...options, model: new FakeModel([{ text: ["Default effort."] }]) }));
+    const app = harness({ run });
+    expect((await app.handler(post({ message: "Hello", effort: "unlimited" }))).status).toBe(400);
+    expect(await store.historyFor(userId)).toHaveLength(0);
+    await (await app.handler(post({ message: "Hello" }))).text();
+    expect(run.mock.calls[0][0].effort).toBe("medium");
+    await app.flush();
+  });
+
   it("continues the current session with previous turns and keeps other users out", async () => {
     await store.saveTurn({ userId, sessionId, role: "user", content: "My team has 20 people" });
     await store.saveTurn({ userId, sessionId, role: "assistant", content: "I will use that team size" });
@@ -91,6 +111,56 @@ describe("chat and history backend with real PGlite and fake model", () => {
     ]);
     expect(JSON.stringify(app.models[0].requests)).not.toContain("Private secret");
     await app.flush();
+  });
+
+  it.each(["gemini", "anthropic"] as const)("lists all of today's user messages across chats with %s, without model/search/curation costs", async provider => {
+    const prompts = Array.from({ length: 120 }, (_, i) => ({
+      userId, sessionId: i % 2 ? "33333333-3333-4333-8333-333333333333" : sessionId,
+      role: "user" as const, content: `Today's question ${i + 1}`, ts: dateFrom(clock.instant.getTime() - (121 - i) * 60_000), tz: "UTC",
+    }));
+    for (const prompt of prompts) {
+      await store.saveTurn(prompt);
+      await store.saveTurn({ ...prompt, role: "assistant", content: "Long assistant response ".repeat(300) });
+    }
+    await store.saveTurn({ userId: "bob", sessionId, role: "user", content: "Foreign secret", ts: dateFrom(clock.instant.getTime() - 1000) });
+    await store.saveTurn({ userId, sessionId, role: "user", content: "Yesterday only", ts: dateFrom("2026-11-14T12:00:00Z") });
+    const run = vi.fn(); const retrieve = vi.fn(); const background = vi.fn();
+    const app = harness({ run, retrieve, curate: background });
+    const response = await app.handler(post({ message: "what are all the questions i asked u today?", tz: "UTC",
+      sessionId: "44444444-4444-4444-8444-444444444444", selection: { provider, model: "test-model" } }));
+    const body = await response.text();
+    expect(body).toContain("**120** earlier");
+    expect(body).toContain("Today's question 1"); expect(body).toContain("Today's question 120");
+    expect(body).not.toContain("Long assistant response"); expect(body).not.toContain("Foreign secret"); expect(body).not.toContain("Yesterday only");
+    expect(body).not.toContain("event: error"); expect(body.match(/event: done/g)).toHaveLength(1);
+    expect(run).not.toHaveBeenCalled(); expect(retrieve).not.toHaveBeenCalled();
+    await app.flush();
+    expect(background).not.toHaveBeenCalled(); expect(await store.pendingCurations(userId)).toHaveLength(0);
+    expect(app.logger.info.mock.calls[0][0]).toMatchObject({ answerMode: "history", searchCount: 0, assistantPersisted: true });
+    await store.saveTurn({ userId, sessionId, role: "user", content: "Newest question after the first list", ts: dateFrom(clock.instant.getTime() - 500) });
+    const next = harness({ run, retrieve, curate: background });
+    const updated = await (await next.handler(post({ message: "what all questions did i ask today", tz: "UTC", selection: { provider, model: "test-model" } }))).text();
+    expect(updated).toContain("Newest question after the first list");
+    await next.flush();
+    expect(run).not.toHaveBeenCalled(); expect(background).not.toHaveBeenCalled();
+  });
+
+  it("paginates same-timestamp user rows inside the local day and excludes other days, future data and other users", async () => {
+    const instant = dateFrom("2026-11-15T10:30:00Z");
+    const rows = [
+      { content: "Before local midnight", ts: dateFrom("2026-11-14T18:29:59Z") },
+      { content: "At local midnight", ts: dateFrom("2026-11-14T18:30:00Z") },
+      { content: "Same time first", ts: instant }, { content: "Same time second", ts: instant },
+      { content: "Future message", ts: dateFrom("2026-11-15T10:31:00Z") },
+    ];
+    for (const row of rows) await store.saveTurn({ userId, sessionId, role: "user", ...row });
+    await store.saveTurn({ userId: "bob", sessionId, role: "user", content: "Foreign", ts: instant });
+    await store.saveTurn({ userId, sessionId, role: "assistant", content: "Assistant", ts: instant });
+    const ranges = [{ startUtc: dateFrom("2026-11-14T18:30:00Z"), endUtc: dateFrom("2026-11-15T18:30:00Z") }];
+    const first = await store.userMessagesFor(userId, { ranges, before: { ts: instant, id: 999 }, limit: 1 });
+    expect(first.map(row => row.content)).toEqual(["Same time second", "Same time first"]);
+    const next = await store.userMessagesFor(userId, { ranges, before: { ts: first[0].ts, id: first[0].id }, limit: 2 });
+    expect(next.map(row => row.content)).toEqual(["Same time first", "At local midnight"]);
   });
 
   it("curates persisted search-backed answers after SSE ends and exposes the claims to later recall", async () => {
@@ -161,7 +231,7 @@ describe("chat and history backend with real PGlite and fake model", () => {
   it("streams and persists a recovered answer with safe provider diagnostics in one trace", async () => {
     const model = new FakeModel([
       { tools: [{ input: { queries: ["fixture live score"] } }] },
-      { error: new ModelProviderError({ provider: "groq", kind: "tool_generation", status: 400 }) },
+      { error: new ModelProviderError({ provider: "gemini", kind: "tool_generation", status: 400 }) },
       { text: ["The current score could not be verified from these sources."] },
     ]);
     const search = vi.fn(async () => ({ queries: [{ query: "fixture live score", results: [{
@@ -180,7 +250,7 @@ describe("chat and history backend with real PGlite and fake model", () => {
     expect(app.logger.info).toHaveBeenCalledOnce();
     expect(app.logger.info.mock.calls[0][0]).toMatchObject({
       searchCount: 1, assistantPersisted: true,
-      modelFailures: [{ provider: "groq", kind: "tool_generation", status: 400 }],
+      modelFailures: [{ provider: "gemini", kind: "tool_generation", status: 400 }],
     });
   });
 
@@ -234,7 +304,7 @@ describe("chat and history backend with real PGlite and fake model", () => {
   it("returns validation errors before touching the database or scheduling work", async () => {
     const get = vi.fn();
     const app = harness({ store: get });
-    for (const input of [{ message: " " }, { message: "Hello", tz: "Mars" }, { message: "Hello", userId }, { message: "Hello", sessionId: "bad" }]) {
+    for (const input of [{ message: " " }, { message: "Hello", tz: "Mars" }, { message: "Hello", userId }, { message: "Hello", sessionId: "bad" }, { message: "Hello", selection: { provider: "groq", model: "removed-model" } }]) {
       expect((await app.handler(post(input))).status).toBe(400);
     }
     expect((await app.handler(new Request("http://localhost/api/chat", { method: "POST", body: "{}" }))).status).toBe(415);

@@ -1,0 +1,57 @@
+.workspace-stage { position: relative; isolation: isolate; overflow: hidden; }
+
+.workspace-ascii {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  color: #edb583;
+  mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent);
+}
+
+.workspace-ascii-texture {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  opacity: 0.38;
+  animation: workspace-ascii-drift 28s ease-in-out infinite alternate;
+}
+
+.workspace-ascii-plane {
+  position: absolute;
+  inset: 0;
+  transform: translate3d(var(--ascii-shift-x, 0px), var(--ascii-shift-y, 0px), 0);
+  transition: transform 900ms ease-out;
+}
+
+.workspace-ascii-focus {
+  position: absolute;
+  inset: 0;
+  opacity: var(--ascii-active, 0);
+  mask-image: radial-gradient(ellipse 220px 180px at var(--ascii-pointer-x, 50%) var(--ascii-pointer-y, 50%), #000, transparent);
+  transition: opacity 700ms ease-out;
+}
+
+.workspace-ascii-highlight { opacity: 0.3; }
+
+.workspace-ascii-shimmer { animation: workspace-ascii-shimmer 12s ease-in-out infinite; }
+
+@keyframes workspace-ascii-drift {
+  from { transform: translate3d(-5px, -6px, 0) scale(1.025); }
+  to { transform: translate3d(5px, 6px, 0) scale(1.025); }
+}
+
+@keyframes workspace-ascii-shimmer {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-ascii-texture, .workspace-ascii-shimmer { animation: none; }
+  .workspace-ascii-plane { transform: none; transition: none; }
+  .workspace-ascii-focus { display: none; }
+}

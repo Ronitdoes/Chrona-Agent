@@ -58,6 +58,35 @@ describe("web_search adapter", () => {
     expect(primary.calls).toHaveLength(2);
   });
 
+  it("bypasses cached live-score snippets, retrieves page text and timestamps the retrieval", async () => {
+    const primary = new FakeSearchProvider(() => [hit({ content: "Scorecard page with match date and update time" })]);
+    const search = createWebSearch({ primary, clock });
+    const input = { queries: ["IND vs NZ score today"] };
+    await search(input);
+    const result = await search(input);
+    expect(primary.calls).toHaveLength(2);
+    expect(primary.calls.every(call => call.fresh && call.depth === "deep")).toBe(true);
+    expect(result.queries[0].results[0]).toMatchObject({ content: "Scorecard page with match date and update time", retrieved_at: instant.toISOString() });
+  });
+
+  it("keeps live refinements fresh even when their queries omit the word live", async () => {
+    const primary = new FakeSearchProvider(() => [hit()]);
+    const search = createWebSearch({ primary, clock });
+    const input = { queries: ["India New Zealand match schedule"] };
+    await search(input);
+    await search(input, { fresh: true });
+    expect(primary.calls).toHaveLength(2);
+    expect(primary.calls[1]).toMatchObject({ fresh: true, depth: "deep" });
+  });
+
+  it("preserves scorecard relevance over article publication dates and falls back from unusable sources", async () => {
+    const primary = new FakeSearchProvider(() => [hit({ url: "https://youtube.com/watch?v=fixture", title: "Live score watch-along" })]);
+    const fallback = new FakeSearchProvider(() => [hit({ url: "https://example.com/scorecard", title: "Live scorecard" }), hit({ url: "https://example.com/article", published_date: "2026-11-15", title: "Match preview" })]);
+    const result = await createWebSearch({ primary, fallback, clock })({ queries: ["IND NZ score today"], topic: "news" });
+    expect(fallback.calls[0]).toMatchObject({ fresh: true, depth: "deep", topic: "general" });
+    expect(result.queries[0].results.map(source => source.url)).toEqual(["https://example.com/scorecard", "https://example.com/article"]);
+  });
+
   it("keeps general cache entries longer and keys every filter", async () => {
     let elapsed = 0;
     const primary = new FakeSearchProvider(() => [hit()]);
@@ -209,6 +238,8 @@ describe("web_search adapter", () => {
     ["2026-11-14T12:00:00+05:30", "2026-11-14T06:30:00.000Z"],
     ["Tue, 10 Nov 2026 12:00:00 GMT", "2026-11-10T12:00:00.000Z"],
     ["2026-11-14T12:00:00", null], ["2026-02-30", null], ["unknown", null],
+    ["15/11/2026", "2026-11-15T00:00:00.000Z"], ["11/15/2026", "2026-11-15T00:00:00.000Z"],
+    ["05/06/2026", null], ["05/06/2026 UTC", null], ["2026-02-30 UTC", null],
   ])("normalizes dated evidence without host timezone assumptions: %s", (raw, normalized) => {
     expect(normalizePublishedDate(raw)).toBe(normalized);
   });

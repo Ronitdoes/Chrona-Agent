@@ -17,12 +17,15 @@ import type { SearchResult } from "./tools/results";
 import { createTurnTrace } from "./trace";
 import { modelSelectionSchema } from "./model-selection";
 import { resolveModelSelection } from "./model-config";
+import { historyListingRequest, loadQuestionHistory, renderQuestionHistory } from "./recall/history-list";
+import { effortSchema } from "./research-effort";
 
 const inputSchema = z.strictObject({
   message: z.string().trim().min(1).max(20_000), sessionId: z.uuid().optional(), tz: timeZone.optional(),
   selection: modelSelectionSchema.optional(),
+  effort: effortSchema.default("medium"),
 });
-type ChatStore = RecallStore & Pick<Store, "saveTurn" | "historyFor"> & CuratorStore;
+type ChatStore = RecallStore & Pick<Store, "saveTurn" | "historyFor" | "userMessagesFor"> & CuratorStore;
 type Trace = { info(data: Record<string, unknown>, message: string): void; error(data: Record<string, unknown>, message: string): void };
 type Dependencies = {
   after: (task: () => Promise<void>) => void;
@@ -67,6 +70,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     }
 
     const abort = new AbortController();
+    const historyListing = historyListingRequest(input.message, calendar);
     const onAbort = () => abort.abort();
     request.signal.addEventListener("abort", onAbort, { once: true });
     if (request.signal.aborted) abort.abort();
@@ -97,7 +101,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           if ("failed" in user) failure ??= "user_persistence";
           else if (assistantText) {
             const saved = await store.saveTurn({ userId: session.userId, sessionId: session.sessionId, role: "assistant", content: assistantText, ts: assistantAt, tz: calendar.tz,
-              curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) },
+              ...(!historyListing ? { curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) } } : {}),
             });
             assistantTurnId = saved.id;
             assistantPersisted = true;
@@ -107,7 +111,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           // A slow extractor must not keep the user's next message behind admission control.
           admission.release();
           // A curator failure never changes the saved transcript or the already-finished SSE response.
-          try { curation = await deps.curate(session.userId, { store, turnId: assistantTurnId, clock: () => deps.clock(calendar.tz), selection }); }
+          try { if (!historyListing) curation = await deps.curate(session.userId, { store, turnId: assistantTurnId, clock: () => deps.clock(calendar.tz), selection }); }
           catch { curation = { completed: 0, failed: 1, deferred: false }; }
           trace[failure ? "error" : "info"]({
             turnId, userTurnId, assistantTurnId, recallMs, ttftMs: ttftMs ?? 0, searchCount, totalMs,
@@ -115,6 +119,8 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             curation,
             modelFailures,
             provider: selection.provider, model: selection.model,
+            effort: input.effort,
+            answerMode: historyListing ? "history" : "model",
           }, "chat_turn");
         }
       });
@@ -162,6 +168,18 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           try {
             abort.signal.throwIfAborted();
             const recallStarted = deps.time();
+            if (historyListing) {
+              const user = await userWrite;
+              if ("failed" in user) throw new Error("User persistence failed");
+              const history = await loadQuestionHistory({ userId: session.userId, request: historyListing, before: { ts: user.turn.ts, id: user.turn.id }, signal: abort.signal }, store)
+                .finally(() => { recallMs = Math.max(0, deps.time() - recallStarted); });
+              const answer = renderQuestionHistory(history, historyListing, calendar);
+              for (let index = 0; index < answer.length; index += 4096) {
+                abort.signal.throwIfAborted();
+                send("delta", { text: answer.slice(index, index + 4096) });
+              }
+              return;
+            }
             const [recalled, recent] = await Promise.all([
               deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore }),
               excludeCurrent(store.historyFor(session.userId, { sessionId: session.sessionId, limit: 20 })),
@@ -174,7 +192,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             while (context[0]?.role === "assistant") context.shift();
             if (sessionContext.truncated) prompt.system.push({ type: "text", text: "Some older current-session turns were omitted by the context budget. Do not invent their contents." });
             prompt.messages.unshift(...context.map((turn) => ({ role: turn.role, content: turn.content })));
-            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection });
+            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort });
             searchCount = result.searchCount;
             evidence = result.evidence;
             modelFailures = result.modelFailures;

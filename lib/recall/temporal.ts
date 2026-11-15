@@ -1,5 +1,6 @@
 import * as chrono from "chrono-node";
 import { dateFrom } from "../clock";
+import { normalizeDateLiterals } from "../calendar-context";
 
 export type DateRange = {
   startUtc: Date;
@@ -208,6 +209,7 @@ function applyPastBias(
   today: LocalDate,
 ): LocalDate {
   const text = result.text.toLowerCase();
+  if (/\b(?:tomorrow|next|upcoming|coming)\b|\bin\s+\d+\s+(?:days?|weeks?|months?|years?)\b/i.test(text)) return day;
 
   if (result.start.isCertain("weekday")) {
     if (/\blast\b/.test(text)) {
@@ -289,6 +291,7 @@ export function resolveDates(
   text: string,
   nowInstant: Date,
   tz: string,
+  mode: "recall" | "event" = "recall",
 ): DateRange[] {
   assertTimeZone(tz);
   if (!Number.isFinite(nowInstant.getTime())) {
@@ -297,7 +300,8 @@ export function resolveDates(
 
   const today = getLocalDate(nowInstant, tz);
   const offsetMinutes = Math.round(getOffsetMs(nowInstant, tz) / 60_000);
-  const results = chrono.parse(text, {
+  const prepared = normalizeDateLiterals(text).normalized;
+  const results = chrono.parse(prepared, {
     instant: nowInstant,
     timezone: offsetMinutes,
   });
@@ -319,14 +323,14 @@ export function resolveDates(
 
     if (year === null || month === null || day === null) continue;
 
-    const resolved = applyPastBias({ year, month, day }, result, today);
+    const resolved = mode === "event" ? { year, month, day } : applyPastBias({ year, month, day }, result, today);
     candidates.push({
       ...localDayRange(resolved, tz, labelForResult(result, resolved)),
       sortIndex: result.index,
     });
   }
 
-  addOrdinalFallbacks(text, today, tz, results, candidates);
+  addOrdinalFallbacks(prepared, today, tz, results, candidates);
 
   const seen = new Set<string>();
 

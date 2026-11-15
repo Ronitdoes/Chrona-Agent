@@ -20,13 +20,14 @@ export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis
         body: JSON.stringify({
           query: request.query,
           search_depth: request.depth === "deep" ? "advanced" : "basic",
-          max_results: 5,
+          max_results: request.fresh ? 3 : 5,
           topic: request.topic,
           time_range: request.recency,
           start_date: request.since,
           include_published_date: true,
           include_answer: false,
           include_raw_content: request.depth === "deep" ? "markdown" : false,
+          ...(request.fresh ? { max_age_hours: 0 } : {}),
           ...(request.prefer_official && request.officialDomains.length ? {
             include_domains: request.officialDomains,
             include_domains_mode: "prefer",

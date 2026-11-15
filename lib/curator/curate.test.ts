@@ -9,7 +9,7 @@ import { clock } from "../../test/agent-fixtures";
 import { curate } from "./curate";
 import { type Extraction, type CuratorInput } from "./schema";
 import type { SearchResult } from "../tools/results";
-import { createGroqCuratorModel } from "./model";
+import { createGeminiCuratorModel } from "./model";
 
 const names = ["HubSpot Starter", "Pipedrive Essential", "Zoho Standard", "Freshsales Growth", "Salesforce Starter"];
 const at = dateFrom("2026-11-09T12:00:00Z");
@@ -75,12 +75,12 @@ describe("post-response curator with real PGlite", () => {
     expect(await store.pendingCurations("alice")).toEqual([]);
   });
 
-  it("persists the five CRM claims through Groq JSON extraction and retains invalid output for retry", async () => {
+  it("persists the five CRM claims through Gemini JSON extraction and retains invalid output for retry", async () => {
     const { assistant, data } = await seed();
     let valid = false;
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop",
-      message: { content: JSON.stringify(valid ? data.extraction : { invalid: true }) } }] }), { headers: { "content-type": "application/json" } }));
-    const model = createGroqCuratorModel("test-key", "qwen/qwen3.8-27b", { fetch });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ candidates: [{ finishReason: "STOP",
+      content: { parts: [{ text: JSON.stringify(valid ? data.extraction : { invalid: true }) }] } }] }));
+    const model = createGeminiCuratorModel("test-key", "gemini-3.5-flash-lite", { fetch });
     expect((await curate("alice", { store, model, clock: () => clock })).failed).toBe(1);
     expect(await store.pendingCurations("alice")).toHaveLength(1);
     expect(await store.claimsForTurns("alice", [assistant.id])).toHaveLength(0);

@@ -166,12 +166,10 @@ Step 8 runs a separate extraction pass inside the existing `after()` task,
 after the assistant turn is saved and the SSE stream is closed. The Anthropic
 provider uses Haiku and the SDK's `messages.parse()` and `zodOutputFormat()` with
 [`output_config.format`](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
-The Groq provider uses the configured `GROQ_MODEL` and key, sending a nonstreaming
-completion with the schema in its system prompt and
-[`response_format: { type: "json_object" }`](https://console.groq.com/docs/structured-outputs).
-JSON mode requires local schema validation; Groq output passes through the same
-strict Zod schema and provenance checks before any database writes. No Anthropic
-key is required for Groq, even when pending extraction needs to be retried.
+Google AI Studio uses native schema-constrained JSON with the selected Gemini
+model and key. Output passes through the same strict Zod schema and provenance
+checks before any database writes. Curation requires only the selected provider's
+key, including retries of pending extraction jobs.
 The curator has no tools; the answering agent still has exactly one, `web_search`.
 Its strict schema rejects malformed, incomplete or refused responses. Claims
 require verbatim excerpts from both the answer and a cited search result that
@@ -297,46 +295,69 @@ it enters the next model request, and source events contain only retained
 evidence. These bounds favor an honest partial answer over an unbounded research
 loop; revisit them only for an explicit longer research mode.
 
-At the user's request, Step 7 also adds an optional Groq transport. Anthropic
-remains the default. `MODEL_PROVIDER=groq` selects `GROQ_API_KEY` and `GROQ_MODEL`
-(default `qwen/qwen3.8-27b`); startup requires only the selected answer provider's
-key, plus `TAVILY_API_KEY`. The [Groq model page](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
-lists tool support. The adapter uses Groq's documented
-[OpenAI-compatible endpoint](https://console.groq.com/docs/openai), converts the
-existing single tool and paired tool-result messages, and normalizes streamed
-text/tool argument chunks into the same loop interface. No framework or second
-model-facing tool is added. Anthropic-specific cache markers are omitted from
-Groq requests. Qwen uses documented `reasoning_effort: none` instruct mode and
-`max_completion_tokens` so hidden reasoning does not consume the visible answer
-budget; see the [API reference](https://console.groq.com/docs/api-reference).
+Anthropic remains the default answer provider; Google AI Studio is available
+through the native Gemini transport. Startup requires the selected provider's
+key plus TAVILY_API_KEY. Both transports share the handwritten agent loop and
+its single web_search tool. The provider-neutral SSE data parser lives in
+lib/agent/sse.ts; Gemini does not depend on another provider's adapter.
 
-The Groq transport does not retry automatically, accepts cancellation, bounds
-stream frames/tool arguments, and hides raw provider errors. It retains only
-allowlisted failure kinds, HTTP status and numeric Retry-After for safe tracing.
-Models and quotas
-are provider-dependent; changing `GROQ_MODEL` requires a compatible text-and-tool
-model. This option deliberately changes the original Anthropic-only plan while
-retaining the deterministic recall and search architecture.
-
-Groq chat input is bounded across the entire request, rather than giving history,
-recall and each tool result independent allowances. `GROQ_MAX_INPUT_TOKENS` defaults
-to 6500; serialized UTF-8 bytes plus message framing conservatively bound tokens,
-including the tool schema and escaped tool-result JSON. `GROQ_MAX_OUTPUT_TOKENS`
-separately caps output at 768. Both are startup-validated and configurable for the
-account's quotas. Search excerpts shrink first, then complete older exchanges
-and recalled data can be omitted with an explicit model-visible notice. Recalled
-transcripts and their extracted claims leave together. Policy, current clock,
-current question and tool/result IDs remain intact; oversized essential input
-fails locally without an API call. No raw string slicing can break a data wrapper.
-See Groq's [error codes](https://console.groq.com/docs/errors) and
-[account rate limits](https://console.groq.com/docs/rate-limits): HTTP 413 requires
-reducing the request, and account input quotas can be smaller than the model context
-window. The loop's one bounded 413 recovery uses a smaller input budget informed
-by the provider's numeric ITPM limit when available; it never repeats a search.
 Explicit live-score and web-lookup requests require `web_search` on the first
 step using the provider's forced tool choice. Definitions, code requests and
 explicit browsing opt-outs retain normal routing. Final/recovery steps keep
 tools disabled. The model still has exactly one available tool.
+
+Live-score intent includes “score today/now”, while definitions and explicit
+browsing opt-outs retain normal routing. The loop forces the initial lookup,
+allows at most two search passes and reserves ten seconds for synthesis within
+the existing four-step, ten-query and 45-second limits. A late tool request can
+receive one paired refusal and a final repair within those same limits.
+
+Gemini synthesis omits tool declarations and converts completed function exchanges
+to ordinary text, retaining escaped evidence wrappers and dropping private thought
+parts/signatures. This avoids the reproduced behavior where a request marked NONE
+still returned another function call. Final synthesis uses low thinking effort.
+Research still preserves exact native signatures for genuine tool continuations.
+
+Live searches bypass local caching, request Tavily max_age_hours=0 with three
+deep results and retain a retrieval timestamp separate from the source's update
+time. Live queries preserve provider relevance instead of ranking dated articles
+above undated scorecards. Videos, watch-alongs and streaming/fantasy promotions
+are excluded from score evidence; schedules cannot establish that play has begun.
+Missing final synthesis retains bounded, escaped and clearly unverified source
+excerpts. The opt-in search:live-smoke reproduces the exact short score-today query
+using real providers, with no database or curator calls; normal tests remain offline.
+
+Research effort is a validated per-request enum, defaulting to medium at the API
+boundary and remembered locally by the composer. Instant/medium/high cap queries
+and distinct sources at 2/5/10, with 30/45/90-second wall budgets. Instant reserves
+eight seconds for finalization and moves to synthesis after its first search pass;
+medium reserves ten seconds, high fifteen. Both retain the four-step ceiling
+(instant uses three) and the live two-pass limit. The Node route allows 120 seconds
+to accommodate High plus persistence and curation. Source selection shares the
+budget fairly across queries, counts duplicate URLs once and retains earlier
+evidence across batches. Only selected sources enter model context, events and
+curation. Effort maps to low/medium/high native Gemini thinking and Anthropic
+output_config.effort; the internal request marker is never sent to a provider.
+
+The calendar context derives the local ISO day, named-month date, weekday and
+local time from the injected clock. Unambiguous numeric date literals normalize
+to ISO; ambiguous day/month alternatives and invalid calendar dates are surfaced
+for clarification. URL path segments are not interpreted as requested dates.
+The same normalization protects recall and provider publication dates. Ambiguous
+history dates cannot accidentally fall through into an all-history inventory.
+Explicit future references retain their year, and upcoming-event parsing is
+separate from historical recall's most-recent-occurrence bias.
+
+Sports intent includes match/fixture-today requests. Sports answer text is held
+until the complete reply can be reviewed for the reproduced no-match-today versus
+finished-earlier-today contradiction, or an explicit today/date/weekday mismatch.
+One text-only repair uses the same evidence, clock and existing request budget;
+the rejected draft is never streamed or persisted. A repeated failure returns
+clearly unverified source excerpts. Ordinary chat retains incremental streaming.
+Offline regressions cover both numeric date orders, ambiguity, invalid days,
+UTC/India/New Zealand boundaries, future dates and the exact contradictory reply.
+The opt-in Instant match-today smoke checks the exact user request with real
+providers, at most two queries/sources, and no chat or curation writes.
 
 ## 7. Failure modes and honesty
 
@@ -353,7 +374,7 @@ errors without executing another capability. Partial search failures preserve
 successful queries. Model failures emit a sanitized error and retain every text
 delta already sent. A stalled research stream leaves time for a tools-disabled
 final answer; a stalled final stream still terminates with an honest error and
-partial response. After sources have been fetched, a recoverable Groq tool-generation,
+partial response. After sources have been fetched, a recoverable model tool-generation,
 network, stream or availability error allows one tools-disabled final attempt using
 the existing evidence, capped at 512 output tokens. A rate limit permits this only
 with a numeric Retry-After that fits the remaining wall-time and step budgets.
@@ -421,16 +442,9 @@ Step 7 integration tests exercise chat and history against real PGlite with fake
 model streams. They check immediate/deferred persistence, exclusion of the new
 turn from recall, follow-up context, cancellation, private user/session scopes,
 pagination with timestamp ties, request bounds, rate limits and one trace per
-turn. Mocked Groq SSE tests cover byte-fragmented content and tool arguments,
+turn. Mocked Gemini SSE tests cover byte-fragmented content, signed function calls,
 paired results, incomplete streams and safe errors. Provider configuration tests
-verify both key requirements. Normal tests never make paid provider calls.
-
-The Step 7 live smoke check used `curl --no-buffer` against the local chat route
-with an isolated anonymous cookie jar. One short Groq/Qwen greeting streamed
-`ready` followed by exactly one `done` event. A cookie-scoped history read then
-confirmed both database turns. This used no web searches. The production build
-also verified both endpoints are dynamic; the existing development server was
-left running.
+verify the selected provider's key requirements. Normal tests never make paid provider calls.
 
 Step 8 tests seed the five-CRM shortlist against real PGlite and confirm that its
 claims reach the recall prompt and suggested revalidation queries. They cover
@@ -438,8 +452,8 @@ duplicate/concurrent passes, quote and URL provenance, invalid output, dated
 supersession, memory corrections, thread merges, user isolation, rollback,
 restart persistence, delayed retries and persistent failures. SDK tests use a
 mocked HTTP response to verify Haiku structured JSON without tools or paid API
-calls. Groq tests verify provider selection with no Anthropic key, the configured
-model, JSON request schema, cancellation, invalid/truncated/refused responses and
+calls. Gemini tests verify provider selection without an Anthropic key, native
+JSON schema configuration, cancellation, invalid/truncated/blocked responses and
 retrying extraction into real PGlite. Route tests confirm extraction follows persistence and streaming, failures
 preserve history, and the next message can proceed while the curator runs.
 Run `npm test -- lib/curator test/api.test.ts lib/store/store.test.ts`.
@@ -473,7 +487,7 @@ and the browser confirms all fonts are loaded. Automated checks include the
 existing 264 tests, TypeScript, frontend lint and the default production build.
 
 Step 10 adds 17 deterministic parser/state tests, bringing the suite to 281.
-Browser checks verified live Groq streaming, code copying and Stop preserving
+Browser checks verified streaming, code copying and Stop preserving
 partial text. Remaining checks used a temporary local SSE fixture, without model
 or search calls or database writes: scroll hold as content grew, jump-to-latest,
 HTTP failures, interrupted responses, both themes and a 375px layout. The fixture
@@ -511,3 +525,94 @@ timers. No API keys, environment flags or extra API endpoints were added.
 Step 11 adds 25 tests covering date/URL validation, status summaries, safe
 markdown annotations and actual React rendering, plus all four demo scenarios
 and cancellation with fetch stubbed. These fixtures require no paid API calls.
+
+Step 12 adds real saved-conversation navigation, new chats, local-calendar groups
+(Today / Yesterday / Previous 7 days / Older), pagination, title filtering of
+loaded history, and browser-persisted pins. Opening a conversation fetches its
+latest saved messages; every POST explicitly identifies its session, so New chat
+does not accidentally continue the old cookie session. Sidebar navigation is
+disabled during streaming; Stop remains available. The mobile drawer uses the
+native dialog's focus containment, Escape handling and background inertness,
+returning focus to its trigger. Offline status prevents accidental sends while
+preserving the current draft. Failed responses and history/model loading have
+inline retry actions. Pure helpers test local dates across DST, greetings and
+merging overlapping history pages without duplicate turns.
+
+The product is branded **Chrona**, reflecting time-aware conversational recall.
+Its empty state has a clock-derived greeting and a vertically centered prompt;
+the same composer moves to the bottom once messages exist. At the user's request,
+the starter chips and visible Enter/Shift+Enter hint were removed; keyboard
+behavior is unchanged. The center book icon was removed. Sidebar branding,
+assistant labels and browser metadata use Chrona and the supplied cat mark.
+Existing storage identifiers remain compatible so the rebrand retains history,
+pins and model choices. `public/chrona-logo.png` is the transparent asset prepared
+with the built-in image editing tool. Final edit prompt: “Remove only the white
+background and excess blank margins; preserve the supplied stretching cat's
+pose, expression, proportions, colors, fur shapes, brown outline, pink ears and
+mouth; keep the full tail and paws, a small transparent margin, and no shadow,
+text or border.” The generated file was copied into the project; its alpha is
+preserved. Next Image serves small optimized instances, and the favicon uses the
+same mark.
+
+The prompt's compact model button opens a themed popover with descriptions and
+a selected checkmark. Its More models section accepts a provider and validated
+model ID. `GET /api/models` publishes IDs and availability only. Each chat POST
+can include `{ selection: { provider, model } }`; validation and provider-key
+checks happen before persistence or model calls. The selection follows the turn
+through answer generation, tracing and background curation. Keys stay server-side;
+model preference is browser-local and cannot override authentication or endpoints.
+Configured defaults are `ANTHROPIC_MODEL` and `GEMINI_MODEL`.
+
+Google AI Studio uses the native Gemini Developer API with
+`GEMINI_MODEL=gemini-3.5-flash-lite` and `GEMINI_API_KEY`, matching the
+[official model ID](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite).
+The handwritten SSE adapter exposes only web_search, respects forced/disabled
+function choice, sanitizes failures, supports cancellation, and keeps thought
+text out of the public stream. It retains exact native response parts and
+function IDs for the current run, including encrypted thought signatures;
+the [signature requirement](https://aistudio.google.com/docs/thought-signatures?generate-content=true)
+requires native Gemini request conversion. Signatures are
+neither persisted nor displayed. Gemini curation uses native schema-constrained
+JSON and the same local extraction/evidence validation. Mocked tests cover
+fragmented SSE, signature/ID replay, provider selection, rejected requests,
+cancellation and malformed/blocked responses. A bounded live validation used two
+Gemini requests and a synthetic search fixture, with no search-provider,
+curation or persistence calls; both returned HTTP 200 and a dated fixture answer.
+
+The last successful model step completes normally without a spurious step-limit
+warning. A regression test reproduces two search batches, a failed stream and a
+fourth-step recovery with assembled policy/recall context, asserting retained score
+evidence, paired function IDs and one terminal completion. The four-step,
+ten-query and wall-time limits remain enforced.
+
+History inventories are deterministic answers, not model inference. The old
+date path fetched the earliest 100 turns and then fit complete user/assistant
+pairs into a small recall budget. Long assistant replies could leave only the
+morning's questions. A
+pure intent/date helper now routes unqualified inventories of the user's own
+questions/messages to a dedicated user-only query. Reverification, topic filters,
+time-of-day filters and mixed requests retain the ordinary model path.
+
+The query is user-scoped across sessions, uses local-day UTC bounds and descending
+timestamp/ID keyset pages, and takes a snapshot before the current user turn.
+It reads fresh data for every request, excluding assistant text, other users,
+future rows and the request itself. Up to 1000 recent messages can be loaded;
+the deterministic renderer orders the selected entries chronologically, uses
+the injected timezone, escapes stored Markdown, and discloses long-message or
+response-budget truncation. Multi-day lists include calendar dates. It emits the
+same SSE contract, persists the answer, and skips both generation and curation,
+so Anthropic and Gemini selections have identical history-list behavior with no
+provider cost. Tests cover more than 100 saved turns, multiple DB pages, fresh
+later messages, local midnight/DST, timestamp ties, tenant isolation, omission
+disclosure and both provider selections with real PGlite.
+
+Conversation deletion uses a native confirmation dialog and an idempotent Node
+DELETE endpoint. One transaction removes only the user's selected session and
+its source-linked claims, memory, threads and curation jobs; references to removed
+claim versions are cleared on the user's surviving baselines. The transaction
+shares the curator's per-user advisory lock, preventing delayed extraction from
+recreating deleted notes. Active responses are protected by the shared request
+admission lease. Failure rolls back the whole deletion. The client removes pins,
+filters stale in-flight history pages and opens a new session when the current
+one is deleted. Tests verify ownership, retained chats/users, FK rollback,
+late-curation rejection and endpoint validation/admission/error sanitization.

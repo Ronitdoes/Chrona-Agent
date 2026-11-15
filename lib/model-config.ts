@@ -1,14 +1,14 @@
 import type { Env } from "./env";
 import { modelSelectionSchema, type ModelCatalog, type ModelSelection, type Provider } from "./model-selection";
 
-const keyNames = { anthropic: "ANTHROPIC_API_KEY", groq: "GROQ_API_KEY", gemini: "GEMINI_API_KEY" } as const;
+const keyNames = { anthropic: "ANTHROPIC_API_KEY", gemini: "GEMINI_API_KEY" } as const;
 export function modelCatalog(config: Env): ModelCatalog {
-  const defaults = { anthropic: config.ANTHROPIC_MODEL, groq: config.GROQ_MODEL, gemini: config.GEMINI_MODEL };
+  const defaults = { anthropic: config.ANTHROPIC_MODEL, gemini: config.GEMINI_MODEL };
   return {
     default: { provider: config.MODEL_PROVIDER, model: defaults[config.MODEL_PROVIDER] },
-    providers: (["anthropic", "groq", "gemini"] as Provider[]).map(id => ({
+    providers: (["anthropic", "gemini"] as Provider[]).map(id => ({
       id, available: Boolean(config[keyNames[id]]),
-      models: [{ id: defaults[id], name: defaults[id] === "gemini-3.5-flash-lite" ? "Gemini 3.5 Flash Lite" : defaults[id] === "claude-sonnet-5-5" ? "Claude Sonnet 5.5" : defaults[id] === "qwen/qwen3.8-27b" ? "Qwen 3.8 27B" : defaults[id] }],
+      models: [{ id: defaults[id], name: defaults[id] === "gemini-3.5-flash-lite" ? "Gemini 3.5 Flash Lite" : defaults[id] === "claude-sonnet-5-5" ? "Claude Sonnet 5.5" : defaults[id] }],
     })),
   };
 }

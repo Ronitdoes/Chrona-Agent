@@ -9,7 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "search:smoke": "vitest run --config scripts/search-smoke.config.mts"
+    "search:smoke": "vitest run --config scripts/search-smoke.config.mts",
+    "search:live-smoke": "vitest run --config scripts/live-search-smoke.config.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

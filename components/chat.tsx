@@ -1,27 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import { ArrowDown, BookOpenText } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { chatReducer, type ChatMessage } from "../lib/chat-state";
 import { ChatStreamError, requestChat, type ChatEvent } from "../lib/chat-stream";
 import { Composer } from "./composer";
 import { MessageList } from "./message-list";
-import { greeting, starters } from "../lib/workspace";
+import { greeting } from "../lib/workspace";
 import type { ModelCatalog, ModelSelection } from "../lib/model-selection";
 import { ModelPicker } from "./model-picker";
+import { EffortPicker } from "./effort-picker";
+import type { ResearchEffort } from "../lib/research-effort";
 
 type ActiveRequest = { id: string; controller: AbortController; flush: () => void; cancelFrame: () => void };
 
 export function Chat({ request = requestChat, localSources = false, initialMessages = [], sessionId, selection, catalog, onSelectionChange,
-  clock, disabled = false, notice, onBusyChange, onSent, onComplete }: {
+  clock, disabled = false, notice, onBusyChange, onSent, onComplete, effort = "medium", onEffortChange }: {
   request?: typeof requestChat; localSources?: boolean; initialMessages?: ChatMessage[]; sessionId?: string;
   selection?: ModelSelection; catalog?: ModelCatalog; onSelectionChange?: (selection: ModelSelection) => void;
   clock?: { iso: string; tz: string }; disabled?: boolean; notice?: string;
   onBusyChange?: (busy: boolean) => void; onSent?: (text: string) => void; onComplete?: () => void;
+  effort?: ResearchEffort; onEffortChange?: (effort: ResearchEffort) => void;
 }) {
   const [state, dispatch] = useReducer(chatReducer, { messages: initialMessages, activeId: null });
   const [draft, setDraft] = useState("");
-  const [focusVersion, setFocusVersion] = useState(0);
   const [showJump, setShowJump] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -90,7 +92,7 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
       }
     };
     try {
-      await request(text, { signal: controller.signal, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, onEvent, sessionId, selection });
+      await request(text, { signal: controller.signal, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, onEvent, sessionId, selection, effort });
       flush();
       if (active.current?.id === id) dispatch({ type: "finish", assistantId: id, outcome: "complete" });
     } catch (error) {
@@ -107,8 +109,8 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
   }
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={viewport} tabIndex={0} role="region" aria-label="Messages" className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
+    <div className={`relative flex min-h-0 flex-1 flex-col ${state.messages.length ? "" : "justify-center"}`}>
+      <div ref={viewport} tabIndex={0} role="region" aria-label="Messages" className={`chat-scroll min-h-0 overflow-y-auto overscroll-contain pr-1 ${state.messages.length ? "flex-1" : "shrink"}`}
         onWheel={(event) => { if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) following.current = false; }}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -118,18 +120,14 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
           previousTop.current = element.scrollTop;
           setShowJump(!following.current && distance > 4);
         }}>
-        <div ref={content} className={state.messages.length ? "pb-5" : "flex min-h-full flex-col"}>
+        <div ref={content} className={state.messages.length ? "pb-5" : ""}>
           {state.messages.length ? <MessageList messages={state.messages} busy={busy} localSources={localSources} onRetry={disabled ? undefined : (text) => { void send(text); }} /> : (
-            <section aria-labelledby="workspace-heading" className="flex flex-1 flex-col justify-center py-8 sm:py-12">
-              <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-border bg-surface">
-                <BookOpenText size={26} strokeWidth={1.35} className="text-accent" aria-hidden="true" />
-              </div>
-              <p className="mb-5 text-[10px] font-medium tracking-[0.18em] text-muted uppercase">Your research, in context</p>
+            <section aria-labelledby="workspace-heading" className="flex flex-col py-4 sm:py-6">
+              <p className="mb-4 text-[10px] font-medium tracking-[0.18em] text-muted uppercase">Your research, in context</p>
               <h1 id="workspace-heading" className="font-serif text-[clamp(2.25rem,4.2vw,3.25rem)] leading-[1.15] font-normal tracking-[-0.035em] text-balance">
                 {clock ? greeting(clock.iso, clock.tz) : "A little context."}<br /><span className="text-muted italic">What’s on your mind?</span>
               </h1>
-              <p className="assistant-prose mt-6 max-w-[410px] text-muted">For fresh questions and familiar threads. Explore an idea, revisit a conversation, or check what’s changed.</p>
-              <div className="mt-7 flex flex-wrap gap-2" aria-label="Starter questions">{starters.map(starter => <button key={starter.title} type="button" className="rounded-xl border border-border px-3 py-2 text-xs text-muted hover:bg-surface hover:text-foreground" onClick={() => { setDraft(starter.text); setFocusVersion(value => value + 1); }}>{starter.title}</button>)}</div>
+              <p className="mt-5 text-sm leading-relaxed text-muted">Ask a fresh question, revisit a conversation, or check what’s changed.</p>
             </section>
           )}
         </div>
@@ -138,9 +136,12 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
         className="absolute right-2 bottom-40 z-10 flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-sm"
         aria-label="Jump to latest message"><ArrowDown size={14} aria-hidden="true" />Jump to latest</button> : null}
       {notice ? <p role="status" className="mt-2 text-xs leading-relaxed text-muted">{notice}</p> : null}
-      <Composer value={draft} onChange={setDraft} busy={busy} disabled={disabled} focusVersion={focusVersion} onSend={() => { void send(); }} onStop={stop}
-        modelControls={catalog && selection && onSelectionChange ? <ModelPicker catalog={catalog} value={selection} onChange={onSelectionChange} disabled={busy} /> : undefined} />
-      <span role="status" className="sr-only">{busy ? "Web Agent is responding. Use Stop response to cancel." : ""}</span>
+      <Composer value={draft} onChange={setDraft} busy={busy} disabled={disabled} onSend={() => { void send(); }} onStop={stop}
+        modelControls={onEffortChange || (catalog && selection && onSelectionChange) ? <>
+          {onEffortChange ? <EffortPicker value={effort} onChange={onEffortChange} disabled={busy} /> : null}
+          {catalog && selection && onSelectionChange ? <ModelPicker catalog={catalog} value={selection} onChange={onSelectionChange} disabled={busy} /> : null}
+        </> : undefined} />
+      <span role="status" className="sr-only">{busy ? "Chrona is responding. Use Stop response to cancel." : ""}</span>
     </div>
   );
 }

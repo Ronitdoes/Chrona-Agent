@@ -41,8 +41,17 @@ describe("Tavily provider", () => {
     expect(body.include_raw_content).toBe(false);
     expect(body).not.toHaveProperty("include_domains");
     expect(body).not.toHaveProperty("include_domains_mode");
+    expect(body).not.toHaveProperty("max_age_hours");
     expect(result[0].snippet).toBe("");
     expect(result[0]).not.toHaveProperty("content");
+  });
+
+  it("requests live page retrieval for fresh score lookups", async () => {
+    const fetcher = response({ results: [] });
+    await createTavilyProvider("test-key", fetcher).search(request({ query: "IND NZ score today", fresh: true, depth: "deep" }));
+    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toMatchObject({
+      max_age_hours: 0, max_results: 3, search_depth: "advanced", include_raw_content: "markdown", include_answer: false,
+    });
   });
 
   it("surfaces HTTP errors and rejects malformed success responses", async () => {

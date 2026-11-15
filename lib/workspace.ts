@@ -9,11 +9,6 @@ export const historyPageSchema = z.object({
   nextCursor: z.string().nullable(), now: z.iso.datetime({ offset: true }), tz: z.string(), activeSessionId: z.uuid(),
 });
 export type HistoryPage = z.infer<typeof historyPageSchema>;
-export const starters = [
-  { title: "Revisit a shortlist", text: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any changed pricing or shipped something big since?" },
-  { title: "Check an earlier answer", text: "What did I ask you on 3 November? Is your answer still correct today?" },
-  { title: "See what’s changed", text: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" },
-];
 function dayNumber(iso: string, tz: string): number {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(dateFrom(iso)).map(part => [part.type, part.value]));
   return dateFrom(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`).getTime() / 86_400_000;

@@ -3,12 +3,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type FormEvent, type ReactNode } from "react";
 import { ArrowUp, Square } from "lucide-react";
 
-export function Composer({ value, busy, onChange, onSend, onStop, disabled = false, modelControls, focusVersion = 0 }: {
+export function Composer({ value, busy, onChange, onSend, onStop, disabled = false, modelControls }: {
   value: string; busy: boolean; onChange: (value: string) => void; onSend: () => void; onStop: () => void;
-  disabled?: boolean; modelControls?: ReactNode; focusVersion?: number;
+  disabled?: boolean; modelControls?: ReactNode;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { if (focusVersion) textarea.current?.focus(); }, [focusVersion]);
   const resize = useCallback(() => {
     const element = textarea.current;
     if (!element) return;
@@ -35,7 +34,7 @@ export function Composer({ value, busy, onChange, onSend, onStop, disabled = fal
   return (
     <form onSubmit={submit} className="shrink-0 pt-3" aria-label="Send a message">
       <div className="composer-card relative rounded-2xl border border-border bg-surface shadow-[0_2px_12px_#00000006] focus-within:border-accent">
-        <textarea ref={textarea} aria-label="Message" aria-describedby="composer-hint" rows={1} maxLength={20_000}
+        <textarea ref={textarea} aria-label="Message" rows={1} maxLength={20_000}
           value={value} onChange={(event) => onChange(event.target.value)} placeholder="Ask a question…"
           className="block min-h-14 w-full resize-none rounded-2xl bg-transparent py-4 pr-16 pl-4 font-sans text-sm leading-6 text-foreground placeholder:text-muted focus:outline-none"
           onKeyDown={(event) => {
@@ -50,7 +49,6 @@ export function Composer({ value, busy, onChange, onSend, onStop, disabled = fal
           {busy ? <Square size={13} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={19} strokeWidth={2} aria-hidden="true" />}
         </button>
       </div>
-      <p id="composer-hint" className="mt-2 mb-1 text-center text-[11px] text-muted">Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</p>
     </form>
   );
 }

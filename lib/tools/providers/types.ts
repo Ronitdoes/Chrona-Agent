@@ -12,6 +12,7 @@ export type SearchRequest = Omit<WebSearchInput, "queries"> & {
   query: string;
   instant: Date;
   officialDomains: string[];
+  fresh?: boolean;
   signal: AbortSignal;
 };
 

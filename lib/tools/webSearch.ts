@@ -3,6 +3,8 @@ import pLimit from "p-limit";
 import pTimeout from "p-timeout";
 import { webSearchInput, type WebSearchInput } from "../agent/schema";
 import { now, type Clock } from "../clock";
+import { isLiveScoreRequest } from "../agent/search-policy";
+import { liveScoreEvidence } from "./live-results";
 import { createTavilyProvider } from "./providers/tavily";
 import { createExaProvider } from "./providers/exa";
 import type { SearchProvider, SearchRequest } from "./providers/types";
@@ -43,31 +45,34 @@ export function createWebSearch(options: Options) {
       return await pTimeout(Promise.resolve().then(() => {
         combined.throwIfAborted();
         return provider.search({ ...request, signal: combined });
-      }), { milliseconds: timeoutMs, signal });
+      }), { milliseconds: request.fresh && options.timeoutMs === undefined ? 15_000 : timeoutMs, signal });
     } finally {
       controller.abort();
     }
   }
 
-  async function searchOne(query: string, input: WebSearchInput, signal?: AbortSignal): Promise<QueryResult> {
+  async function searchOne(query: string, input: WebSearchInput, signal?: AbortSignal, forceFresh = false): Promise<QueryResult> {
     if (signal?.aborted) return { query, results: [], error: { code: "aborted", message: "Search was cancelled." } };
     const instant = clock().instant;
+    const fresh = forceFresh || isLiveScoreRequest(query);
     const officialDomains = (options.officialDomains ?? officialDomainsFor)(query);
     const filters = {
-      recency: input.recency, since: input.since, topic: input.topic,
-      prefer_official: input.prefer_official, depth: input.depth,
+      recency: input.recency, since: input.since, topic: fresh ? "general" as const : input.topic,
+      prefer_official: input.prefer_official, depth: fresh ? "deep" as const : input.depth,
     };
-    const request = { ...filters, query, instant, officialDomains };
+    const request = { ...filters, query, instant, officialDomains, ...(fresh ? { fresh: true } : {}) };
     const key = JSON.stringify([query, filters, instant.toISOString().slice(0, 10), officialDomains]);
-    const cached = cache.get(key);
+    const cached = fresh ? undefined : cache.get(key);
     if (cached) return { query, results: cached };
     for (const provider of [options.primary, options.fallback]) {
       if (!provider) continue;
       try {
         const raw = await callProvider(provider, request, signal);
         if (signal?.aborted) break;
-        const results = normalizeResults(raw, officialDomains, input.prefer_official, input.depth === "deep");
-        cache.set(key, results, { ttl: cacheTtl(input) });
+        const results = normalizeResults(fresh ? liveScoreEvidence(raw) : raw, officialDomains, input.prefer_official, filters.depth === "deep", fresh);
+        if (fresh && !results.length && provider === options.primary && options.fallback) continue;
+        if (fresh) for (const result of results) result.retrieved_at = clock().iso;
+        else cache.set(key, results, { ttl: cacheTtl(input) });
         return { query, results };
       } catch {
         if (signal?.aborted) break;
@@ -78,7 +83,7 @@ export function createWebSearch(options: Options) {
       : { code: "search_failed", message: "Search providers failed or timed out. Retry or report this query as unverifiable." } };
   }
 
-  return async function webSearch(rawInput: unknown, { signal }: { signal?: AbortSignal } = {}): Promise<WebSearchResult> {
+  return async function webSearch(rawInput: unknown, { signal, fresh = false }: { signal?: AbortSignal; fresh?: boolean } = {}): Promise<WebSearchResult> {
     const parsed = webSearchInput.safeParse(rawInput);
     let queries: QueryResult[] = [];
     let error: SearchPayload["error"];
@@ -88,7 +93,7 @@ export function createWebSearch(options: Options) {
       // Deduplicate repeated queries within a call, while retaining their input order.
       const pending = new Map<string, Promise<QueryResult>>();
       queries = await Promise.all(parsed.data.queries.map((query) => {
-        if (!pending.has(query)) pending.set(query, limit(() => searchOne(query, parsed.data, signal)));
+        if (!pending.has(query)) pending.set(query, limit(() => searchOne(query, parsed.data, signal, fresh)));
         return pending.get(query)!;
       }));
     }
@@ -104,7 +109,7 @@ export function createWebSearch(options: Options) {
 
 let configured: ReturnType<typeof createWebSearch> | undefined;
 
-export async function webSearch(input: unknown, options?: { signal?: AbortSignal }): Promise<WebSearchResult> {
+export async function webSearch(input: unknown, options?: { signal?: AbortSignal; fresh?: boolean }): Promise<WebSearchResult> {
   if (!configured) {
     const { env } = await import("../env");
     configured = createWebSearch({

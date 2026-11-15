@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { greeting, historyGroups, mergeHistory, sessionMessages, starters } from "./workspace";
+import { greeting, historyGroups, mergeHistory, sessionMessages } from "./workspace";
 import type { HistorySession } from "./history";
 
 const session = (id: string, lastTs: string): HistorySession => ({ id, title: id, lastTs, days: [] });
@@ -24,6 +24,5 @@ describe("workspace dates and history", () => {
     expect(sessionMessages(merged[0]).map(turn => turn.content)).toEqual(["Original question", "Answer"]);
     expect(mergeHistory(merged, [older])).toEqual(merged);
     expect(sessionMessages()).toEqual([]);
-    expect(starters).toHaveLength(3);
   });
 });
