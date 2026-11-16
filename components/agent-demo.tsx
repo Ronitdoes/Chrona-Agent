@@ -10,6 +10,7 @@ import { SearchStatus } from "./search-status";
 import { SourceChips } from "./source-chips";
 import { AsOfChip, VerdictBadge } from "./research-badges";
 import { useSmoothScroll } from "./smooth-scrolling";
+import { ConversationSkeleton, HistoryRowsSkeleton, ModelPickerSkeleton } from "./loading-skeleton";
 
 export function AgentDemo() {
   const [view, setView] = useState<"components" | "stream">("components");
@@ -47,6 +48,13 @@ export function AgentDemo() {
         <Chat key={`${scenario}:${replay}`} request={request} localSources />
       </> : <div ref={viewport} data-lenis-scroll className="chat-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain" tabIndex={0} role="region" aria-label="Component examples">
         <div ref={content} className="space-y-9 pt-6 pb-8">
+        <section aria-labelledby="demo-loading"><h2 id="demo-loading" className="mb-3 text-sm font-medium">Loading states</h2>
+          <p className="mb-4 text-xs leading-relaxed text-muted">History, conversations and model settings use the same placeholders as the workspace. Animation follows your reduced-motion preference.</p>
+          <div className="grid gap-6 sm:grid-cols-[180px_1fr]">
+            <div className="rounded-xl border border-border p-3"><p className="mb-2 text-[11px] text-muted">History</p><HistoryRowsSkeleton rows={4} /></div>
+            <div className="min-w-0"><ConversationSkeleton /><ModelPickerSkeleton /></div>
+          </div>
+        </section>
         <section aria-labelledby="demo-searches"><h2 id="demo-searches" className="mb-3 text-sm font-medium">Search activity</h2>
           <SearchStatus searches={running} state="streaming" />
           <SearchStatus searches={demoSearches} state="complete" />

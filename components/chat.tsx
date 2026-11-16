@@ -12,16 +12,19 @@ import { ModelPicker } from "./model-picker";
 import { EffortPicker } from "./effort-picker";
 import type { ResearchEffort } from "../lib/research-effort";
 import { useSmoothScroll } from "./smooth-scrolling";
+import { ConversationSkeleton, ModelPickerSkeleton } from "./loading-skeleton";
 
 type ActiveRequest = { id: string; controller: AbortController; flush: () => void; cancelFrame: () => void };
 
 export function Chat({ request = requestChat, localSources = false, initialMessages = [], sessionId, selection, catalog, onSelectionChange,
-  clock, disabled = false, notice, onBusyChange, onSent, onComplete, effort = "medium", onEffortChange }: {
+  clock, disabled = false, notice, onBusyChange, onSent, onComplete, effort = "medium", onEffortChange,
+  loading = false, loadingLabel, modelsLoading = false }: {
   request?: typeof requestChat; localSources?: boolean; initialMessages?: ChatMessage[]; sessionId?: string;
   selection?: ModelSelection; catalog?: ModelCatalog; onSelectionChange?: (selection: ModelSelection) => void;
   clock?: { iso: string; tz: string }; disabled?: boolean; notice?: string;
   onBusyChange?: (busy: boolean) => void; onSent?: (text: string) => void; onComplete?: () => void;
   effort?: ResearchEffort; onEffortChange?: (effort: ResearchEffort) => void;
+  loading?: boolean; loadingLabel?: string; modelsLoading?: boolean;
 }) {
   const [state, dispatch] = useReducer(chatReducer, { messages: initialMessages, activeId: null });
   const [draft, setDraft] = useState("");
@@ -114,9 +117,10 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
   }
 
   return (
-    <div className={`relative flex min-h-0 flex-1 flex-col ${state.messages.length ? "" : "justify-center"}`}>
-      <div ref={viewport} data-lenis-scroll tabIndex={0} role="region" aria-label="Messages" className="chat-scroll min-h-0 overflow-y-auto overscroll-contain"
-        style={{ flex: state.messages.length ? "1 1 0%" : "0 1 auto" }}
+    <div className={`relative flex min-h-0 flex-1 flex-col ${state.messages.length || loading ? "" : "justify-center"}`}>
+      <div className="relative min-h-0" style={{ flex: state.messages.length || loading ? "1 1 0%" : "0 1 auto" }}>
+      <div ref={viewport} data-lenis-scroll tabIndex={loading ? -1 : 0} role="region" aria-label="Messages" aria-busy={loading} inert={loading}
+        className="chat-scroll h-full min-h-0 overflow-y-auto overscroll-contain" style={{ visibility: loading ? "hidden" : undefined }}
         onWheel={(event) => { if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) following.current = false; }}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -138,14 +142,16 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
           )}
         </div>
       </div>
-      {showJump ? <button type="button" onClick={() => { following.current = true; scrollToLatest(true); setShowJump(false); }}
+      {loading ? <div className="absolute inset-0 overflow-hidden"><ConversationSkeleton label={loadingLabel} /></div> : null}
+      </div>
+      {showJump && !loading ? <button type="button" onClick={() => { following.current = true; scrollToLatest(true); setShowJump(false); }}
         className="absolute right-2 bottom-40 z-10 flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-sm"
         aria-label="Jump to latest message"><ArrowDown size={14} aria-hidden="true" />Jump to latest</button> : null}
       {notice ? <p role="status" className="mt-2 text-xs leading-relaxed text-muted">{notice}</p> : null}
       <Composer value={draft} onChange={setDraft} busy={busy} disabled={disabled} onSend={() => { void send(); }} onStop={stop}
-        modelControls={onEffortChange || (catalog && selection && onSelectionChange) ? <>
-          {onEffortChange ? <EffortPicker value={effort} onChange={onEffortChange} disabled={busy} /> : null}
-          {catalog && selection && onSelectionChange ? <ModelPicker catalog={catalog} value={selection} onChange={onSelectionChange} disabled={busy} /> : null}
+        modelControls={onEffortChange || modelsLoading || (catalog && selection && onSelectionChange) ? <>
+          {onEffortChange ? <EffortPicker value={effort} onChange={onEffortChange} disabled={busy || modelsLoading} /> : null}
+          {modelsLoading ? <ModelPickerSkeleton /> : catalog && selection && onSelectionChange ? <ModelPicker catalog={catalog} value={selection} onChange={onSelectionChange} disabled={busy} /> : null}
         </> : undefined} />
       <span role="status" className="sr-only">{busy ? "Chrona is responding. Use Stop response to cancel." : ""}</span>
     </div>

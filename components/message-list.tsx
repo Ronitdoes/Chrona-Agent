@@ -7,6 +7,7 @@ import type { ChatMessage } from "../lib/chat-state";
 import { MarkdownMessage } from "./markdown-message";
 import { SearchStatus } from "./search-status";
 import { SourceChips } from "./source-chips";
+import { ResponseSkeleton } from "./loading-skeleton";
 
 const Message = memo(function Message({ message, localSources, onRetry }: { message: ChatMessage; localSources: boolean; onRetry?: () => void }) {
   if (message.role === "user") return (
@@ -21,7 +22,7 @@ const Message = memo(function Message({ message, localSources, onRetry }: { mess
       </div>
       <SearchStatus searches={message.searches ?? []} state={message.state} />
       <div className="assistant-prose">
-        {message.content ? <MarkdownMessage content={message.content} /> : message.state === "streaming" ? <p className="thinking text-muted">Thinking<span aria-hidden="true">…</span></p> : null}
+        {message.content ? <MarkdownMessage content={message.content} /> : message.state === "streaming" ? <ResponseSkeleton /> : null}
         {message.state === "streaming" && message.content ? <span className="streaming-caret" aria-hidden="true" /> : null}
       </div>
       <SourceChips sources={message.sources ?? []} localFavicons={localSources} />

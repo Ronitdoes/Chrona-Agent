@@ -24,12 +24,14 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [revision, setRevision] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
   const [cursor, setCursor] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [selection, setSelection] = useState<ModelSelection>();
   const [effort, setEffort] = useState<ResearchEffort>("medium");
   const [modelError, setModelError] = useState<string>();
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [pinned, setPinned] = useState<string[]>([]);
   const [opening, setOpening] = useState(false);
@@ -46,7 +48,7 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   const loadHistory = useCallback(async (before?: string, restore = false) => {
     historyRequest.current?.abort();
     const controller = new AbortController(); historyRequest.current = controller;
-    setHistoryLoading(true); setHistoryError(undefined);
+    setHistoryLoading(true); setHistoryLoadingMore(Boolean(before)); setHistoryError(undefined);
     try {
       const query = new URLSearchParams({ limit: "200", tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
       if (before) query.set("before", before);
@@ -67,13 +69,13 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       }
     } catch {
       if (!controller.signal.aborted) { setHistoryError("Conversation history is unavailable. Your current chat stays here."); setSessionId(current => current ?? crypto.randomUUID()); }
-    } finally { if (!controller.signal.aborted) setHistoryLoading(false); }
+    } finally { if (!controller.signal.aborted) { setHistoryLoading(false); setHistoryLoadingMore(false); } }
   }, []);
 
   const loadModels = useCallback(async () => {
     modelRequest.current?.abort();
     const controller = new AbortController(); modelRequest.current = controller;
-    setModelError(undefined);
+    setModelError(undefined); setModelsLoading(true);
     try {
       const response = await fetch("/api/models", { credentials: "same-origin", signal: controller.signal });
       if (!response.ok) throw new Error("Models unavailable");
@@ -85,6 +87,7 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       try { const parsed = modelSelectionSchema.safeParse(JSON.parse(localStorage.getItem("web-agent.model") ?? "null")); if (parsed.success) saved = parsed.data; } catch { /* Optional storage. */ }
       setSelection(current => current ?? saved ?? data.default);
     } catch { if (!controller.signal.aborted) setModelError("Model settings could not be loaded."); }
+    finally { if (!controller.signal.aborted) setModelsLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -138,7 +141,7 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
         return;
       }
       deleted.current.add(id);
-      historyRequest.current?.abort(); setHistoryLoading(false);
+      historyRequest.current?.abort(); setHistoryLoading(false); setHistoryLoadingMore(false);
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       setSessions(current => current.filter(session => session.id !== id));
       setPinned(current => { const next = current.filter(item => item !== id); storeValue("web-agent.pinned", JSON.stringify(next)); return next; });
@@ -162,15 +165,16 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   }
   const available = catalog?.providers.find(provider => provider.id === selection?.provider)?.available;
   const validSelection = modelSelectionSchema.safeParse(selection).success;
-  const notice = !online ? "You’re offline. Your draft is safe here; reconnect to send it." : opening ? "Opening conversation…" : modelError
-    ?? (!catalog ? "Loading model settings…" : !available ? `Add ${selection?.provider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY"} to your server environment, then restart the app.` : !validSelection ? "Enter a valid model ID." : undefined);
+  const notice = !online ? "You’re offline. Your draft is safe here; reconnect to send it." : modelError
+    ?? (catalog ? !available ? `Add ${selection?.provider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY"} to your server environment, then restart the app.` : !validSelection ? "Enter a valid model ID." : undefined : undefined);
 
-  return <AppShell sidebar={<HistorySidebar sessions={sessions} selected={sessionId} iso={clock.iso} tz={clock.tz} loading={historyLoading} error={historyError} hasMore={Boolean(cursor)} disabled={busy || opening || deleting} pinned={pinned} onPin={togglePin}
+  return <AppShell sidebar={<HistorySidebar sessions={sessions} selected={sessionId} iso={clock.iso} tz={clock.tz} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} hasMore={Boolean(cursor)} disabled={busy || opening || deleting} pinned={pinned} onPin={togglePin}
     onDelete={conversation => { setDeleteError(undefined); setPendingDelete(conversation); }}
     onNew={newChat} onSelect={id => { void openSession(id); }} onMore={() => { if (cursor) void loadHistory(cursor); }} onRetry={() => { void loadHistory(undefined, !sessionId); }} />}>
     {modelError ? <button type="button" onClick={() => { void loadModels(); }} className="mb-2 w-fit rounded text-xs text-muted underline">Retry model settings</button> : null}
     <Chat key={`${sessionId}:${revision}`} sessionId={sessionId ?? undefined} initialMessages={messages} selection={selection} catalog={catalog} onSelectionChange={changeModel}
       clock={clock} disabled={!online || !sessionId || opening || !catalog || !available || !validSelection} notice={notice}
+      loading={opening || historyLoading && !sessionId} loadingLabel={opening ? "Opening conversation" : "Loading conversation"} modelsLoading={modelsLoading && !catalog}
       onBusyChange={setBusy} onSent={sent} onComplete={complete} effort={effort} onEffortChange={changeEffort} />
     <DeleteConversationDialog conversation={pendingDelete} deleting={deleting} online={online} error={deleteError} tz={clock.tz} onConfirm={() => { void deleteConversation(); }} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </AppShell>;

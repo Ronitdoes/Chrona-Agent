@@ -256,6 +256,14 @@ overwriting Lenis-managed classes when the empty view becomes a conversation.
 
 The ASCII workspace background is a procedural glyph field with fixed coordinates
 for hydration, a quiet reading center, SVG/CSS texture and a reduced-motion path.
+Pending history, pagination, conversation loading, model settings and the first
+response text use shared skeletons shaped like the content they replace. Loaded
+history remains visible during background refreshes. Conversation loading keeps
+the mounted chat/draft and previous scroll geometry, hiding stale messages until
+the request settles. Skeletons use existing theme tokens, hidden decorative bars,
+accessible loading statuses and animation only when reduced motion is disabled.
+Errors remain actionable text, and streaming prose replaces its placeholder as
+soon as text arrives.
 The component demo shares real rendering and stream parsing
 with fictional local fixtures; it makes no provider requests or storage writes.
 The alternative to the shared UI behavior is separate demo-only logic that drifts
