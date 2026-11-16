@@ -4,7 +4,7 @@ import { memo } from "react";
 import { CircleAlert, Square, RefreshCw } from "lucide-react";
 import { AppLogo } from "./app-logo";
 import type { ChatMessage } from "../lib/chat-state";
-import { MarkdownMessage } from "./markdown-message";
+import { AnswerBody } from "./answer-body";
 import { SearchStatus } from "./search-status";
 import { SourceChips } from "./source-chips";
 import { ResponseSkeleton } from "./loading-skeleton";
@@ -22,10 +22,10 @@ const Message = memo(function Message({ message, localSources, onRetry }: { mess
       </div>
       <SearchStatus searches={message.searches ?? []} state={message.state} />
       <div className="assistant-prose">
-        {message.content ? <MarkdownMessage content={message.content} /> : message.state === "streaming" ? <ResponseSkeleton /> : null}
+        {message.content || message.answerUi ? <AnswerBody content={message.content} answerUi={message.answerUi} /> : message.state === "streaming" ? <ResponseSkeleton /> : null}
         {message.state === "streaming" && message.content ? <span className="streaming-caret" aria-hidden="true" /> : null}
       </div>
-      <SourceChips sources={message.sources ?? []} localFavicons={localSources} />
+      <SourceChips sources={message.answerUi?.sources ?? message.sources ?? []} numbered={Boolean(message.answerUi)} localFavicons={localSources} />
       {message.state === "stopped" ? <p className="mt-3 flex items-center gap-1.5 text-xs text-muted"><Square size={10} aria-hidden="true" />Response stopped</p> : null}
       {message.error ? <p role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-border px-3 py-2.5 text-xs leading-relaxed text-muted"><CircleAlert size={15} className="mt-0.5 shrink-0" aria-hidden="true" />{message.error}</p> : null}
       {message.error && onRetry ? <button type="button" onClick={onRetry} className="mt-2 flex items-center gap-1.5 rounded py-1 text-xs text-muted hover:text-foreground"><RefreshCw size={12} aria-hidden="true" />Retry response</button> : null}

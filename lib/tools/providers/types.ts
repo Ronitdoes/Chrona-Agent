@@ -6,6 +6,7 @@ export type ProviderResult = {
   published_date?: string | null;
   snippet: string;
   content?: string | null;
+  images?: { url: string; alt?: string }[];
 };
 
 export type SearchRequest = Omit<WebSearchInput, "queries"> & {

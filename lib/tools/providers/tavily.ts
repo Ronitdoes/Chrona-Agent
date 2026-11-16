@@ -7,6 +7,7 @@ const responseSchema = z.object({ results: z.array(z.object({
   content: z.string().nullish(),
   raw_content: z.string().nullish(),
   published_date: z.string().nullish(),
+  images: z.array(z.union([z.string(), z.object({ url: z.string(), description: z.string().nullish() })]).catch("")).catch([]).optional(),
 })) });
 
 export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis.fetch): SearchProvider {
@@ -26,6 +27,7 @@ export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis
           start_date: request.since,
           include_published_date: true,
           include_answer: false,
+          ...(request.include_images ? { include_images: true } : {}),
           include_raw_content: request.depth === "deep" ? "markdown" : false,
           ...(request.fresh ? { max_age_hours: 0 } : {}),
           ...(request.prefer_official && request.officialDomains.length ? {
@@ -42,6 +44,7 @@ export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis
         url: result.url,
         published_date: result.published_date,
         snippet: result.content ?? "",
+        ...(request.include_images ? { images: (result.images ?? []).map(image => ({ url: typeof image === "string" ? image : image.url })) } : {}),
         ...(request.depth === "deep" ? { content: result.raw_content } : {}),
       }));
     },

@@ -1,3 +1,4 @@
+import { canonicalUrl } from "./results";
 import { LRUCache } from "lru-cache";
 import pLimit from "p-limit";
 import pTimeout from "p-timeout";
@@ -21,7 +22,8 @@ type Options = {
   officialDomains?: (query: string) => string[];
 };
 
-export type WebSearchResult = SearchPayload & { usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[]; is_error: boolean; content: string };
+export type ImageCandidates = Record<string, { url: string; alt?: string }[]>;
+export type WebSearchResult = SearchPayload & { images?: ImageCandidates; usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[]; is_error: boolean; content: string };
 
 export function cacheTtl(input: Pick<WebSearchInput, "topic" | "recency">): number {
   if (input.topic === "news" || input.recency === "day") return 60_000;
@@ -35,7 +37,7 @@ export function createWebSearch(options: Options) {
   const maxTokens = options.maxTokens ?? 8000;
   if (!(timeoutMs > 0 && Number.isFinite(timeoutMs))) throw new Error("Search timeout must be positive and finite");
   if (!Number.isInteger(maxTokens) || maxTokens < 512) throw new Error("Search token budget must be at least 512");
-  const cache = new LRUCache<string, { results: SearchResult[]; provider: SearchProvider; fallback: boolean }>({
+  const cache = new LRUCache<string, { results: SearchResult[]; images: ImageCandidates; provider: SearchProvider; fallback: boolean }>({
     max: 200, ttlResolution: 0, perf: { now: () => clock().instant.getTime() },
   });
 
@@ -52,13 +54,13 @@ export function createWebSearch(options: Options) {
     }
   }
 
-  async function searchOne(query: string, input: WebSearchInput, signal?: AbortSignal, forceFresh = false): Promise<QueryResult> {
+  async function searchOne(query: string, input: WebSearchInput, signal?: AbortSignal, forceFresh = false): Promise<QueryResult & { images?: ImageCandidates }> {
     if (signal?.aborted) return { query, results: [], error: { code: "aborted", message: "Search was cancelled." } };
     const instant = clock().instant;
     const fresh = forceFresh || isLiveScoreRequest(query);
     const officialDomains = (options.officialDomains ?? officialDomainsFor)(query);
     const filters = {
-      recency: input.recency, since: input.since, topic: fresh ? "general" as const : input.topic,
+      include_images: input.include_images ?? true, recency: input.recency, since: input.since, topic: fresh ? "general" as const : input.topic,
       prefer_official: input.prefer_official, depth: fresh ? "deep" as const : input.depth,
     };
     const request = { ...filters, query, instant, officialDomains, ...(fresh ? { fresh: true } : {}) };
@@ -66,7 +68,7 @@ export function createWebSearch(options: Options) {
     const cached = fresh ? undefined : cache.get(key);
     if (cached) {
       options.onProvider?.(cached.provider, query, cached.fallback);
-      return { query, results: cached.results };
+      return { query, results: cached.results, images: cached.images };
     }
     for (const provider of [options.primary, options.fallback]) {
       if (!provider) continue;
@@ -75,10 +77,16 @@ export function createWebSearch(options: Options) {
         options.onProvider?.(provider, query, provider !== options.primary);
         if (signal?.aborted) break;
         const results = normalizeResults(fresh ? liveScoreEvidence(raw) : raw, officialDomains, input.prefer_official, filters.depth === "deep", fresh);
+        const images: ImageCandidates = {};
+        if (filters.include_images) for (const item of raw) {
+          const page = canonicalUrl(item.url);
+          if (!page) continue;
+          images[page] = [...(images[page] ?? []), ...(item.images ?? [])].filter(image => image.url.length <= 2048 && /^https:\/\//.test(image.url)).slice(0, 8);
+        }
         if (fresh && !results.length && provider === options.primary && options.fallback) continue;
         if (fresh) for (const result of results) result.retrieved_at = clock().iso;
-        else cache.set(key, { results, provider, fallback: provider !== options.primary }, { ttl: cacheTtl(input) });
-        return { query, results };
+        else cache.set(key, { results, images, provider, fallback: provider !== options.primary }, { ttl: cacheTtl(input) });
+        return { query, results, images };
       } catch {
         if (signal?.aborted) break;
       }
@@ -90,25 +98,30 @@ export function createWebSearch(options: Options) {
 
   return async function webSearch(rawInput: unknown, { signal, fresh = false }: { signal?: AbortSignal; fresh?: boolean } = {}): Promise<WebSearchResult> {
     const parsed = webSearchInput.safeParse(rawInput);
-    let queries: QueryResult[] = [];
+    let queries: (QueryResult & { images?: ImageCandidates })[] = [];
     let error: SearchPayload["error"];
     if (!parsed.success) {
       error = { code: "invalid_input", message: "Invalid web_search input. Supply 1–6 nonempty queries and valid optional filters (since: YYYY-MM-DD)." };
     } else {
       // Deduplicate repeated queries within a call, while retaining their input order.
-      const pending = new Map<string, Promise<QueryResult>>();
+      const pending = new Map<string, Promise<QueryResult & { images?: ImageCandidates }>>();
       queries = await Promise.all(parsed.data.queries.map((query) => {
         if (!pending.has(query)) pending.set(query, limit(() => searchOne(query, parsed.data, signal, fresh)));
         return pending.get(query)!;
       }));
     }
+    const images: ImageCandidates = {};
+    for (const query of queries) for (const [page, candidates] of Object.entries(query.images ?? {})) {
+      images[page] = [...new Map([...(images[page] ?? []), ...candidates].map(image => [image.url, image])).values()].slice(0, 8);
+    }
+    queries = queries.map(query => ({ query: query.query, results: query.results, ...(query.error ? { error: query.error } : {}) }));
     const { payload, content } = error
       ? { payload: { queries, error, truncated: false }, content: "" }
       : fitBudget(queries, maxTokens);
     if (error) {
       return { ...payload, is_error: true, content: wrapResults(payload) };
     }
-    return { ...payload, content, is_error: Boolean(payload.error) || payload.queries.every((query) => Boolean(query.error)) };
+    return { ...payload, images, content, is_error: Boolean(payload.error) || payload.queries.every((query) => Boolean(query.error)) };
   };
 }
 

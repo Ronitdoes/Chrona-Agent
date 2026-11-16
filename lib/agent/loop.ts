@@ -1,3 +1,5 @@
+import { buildRichAnswer, type RichAnswerV1 } from "../answer-blocks";
+import type { ImageCandidates } from "../tools/webSearch";
 import { answerDetailInstruction, answerDetailProfiles, answerOutputTokens, type AnswerDetail } from "../answer-detail";
 import { randomUUID } from "node:crypto";
 import type { MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
@@ -54,6 +56,8 @@ export async function runAgent(options: RunOptions) {
   const requireSearch = typeof current?.content === "string" && requiresWebSearch(current.content);
   const liveLookup = typeof current?.content === "string" && isLiveScoreRequest(current.content);
   const sources = new Map<string, Source>();
+  let answerUi: RichAnswerV1 | undefined;
+  const imageCandidates: ImageCandidates = {};
   const evidence = new Map<string, SearchResult>();
   const completed = new Set<string>();
   const unverified = new Set<string>();
@@ -276,10 +280,11 @@ export async function runAgent(options: RunOptions) {
         let count = 0;
         let usage: AgentEvents["status"]["usage"];
         try {
-          const found = await pTimeout(search({ ...parsed.data, queries }, { signal: searchSignal, ...(liveLookup ? { fresh: true } : {}) }), {
+          const found = await pTimeout(search({ ...parsed.data, queries, include_images: Boolean(parsed.data.include_images !== false && (answerUi?.images.length ?? 0) < 4) }, { signal: searchSignal, ...(liveLookup ? { fresh: true } : {}) }), {
             milliseconds: Math.max(1, limits.maxWallMs - limits.finalReserveMs - elapsed()), signal,
           });
           usage = found.usage;
+          Object.assign(imageCandidates, found.images ?? {});
           signal.throwIfAborted();
           if (found.error) {
             if (found.error.code === "output_budget") reasons.add("search output limit");
@@ -316,6 +321,13 @@ export async function runAgent(options: RunOptions) {
           emit("status", { id, kind: "search", queries, state: "done", count, ...(usage ? { usage } : {}) });
         }
         emit("sources", [...sources.values()]);
+        if (sources.size) {
+          const snapshot = buildRichAnswer([...sources.values()], imageCandidates, answerUi);
+          if (JSON.stringify(snapshot) !== JSON.stringify(answerUi)) {
+            answerUi = snapshot;
+            emit("answer_ui", snapshot);
+          }
+        }
       }
       messages.push({ role: "user", content: results });
     }

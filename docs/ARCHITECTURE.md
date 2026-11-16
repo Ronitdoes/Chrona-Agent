@@ -283,3 +283,7 @@ deployment provider keys. Search caches exist within that request context.
 The effort popup selects Tavily or Exa. The selected provider runs first and the
 other saved provider can run once after failure. Search SSE status reports the
 actual provider and fallback per query. The model exposes only `web_search`.
+
+## Rich answer presentation
+
+Search adapters can return page-associated image candidates alongside normalized text. The search cache retains them separately and the agent joins them to sources after final evidence budgeting. Asset URLs never enter model evidence. The server publishes bounded `answer_ui` snapshots containing ordered citation sources and an optional provider-image gallery. `turns.answer_ui` stores the latest snapshot with the transcript, and history restores it without a search. Presentation data stays outside recall and curation inputs. Mixed answers record the start of their external research prose. See [rich search answers](RICH_SEARCH_ANSWERS.md) for retrieval behavior and limits.

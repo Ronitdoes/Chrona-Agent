@@ -94,6 +94,9 @@ const migrations = [{
     `CREATE TABLE conversations (id text PRIMARY KEY, user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE)`,
     `CREATE INDEX conversations_user ON conversations(user_id)`,
   ],
+}, {
+  version: 7,
+  statements: [`ALTER TABLE turns ADD COLUMN answer_ui jsonb`],
 }];
 
 export async function migrate(db: StoreDatabase): Promise<void> {

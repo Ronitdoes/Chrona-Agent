@@ -124,7 +124,7 @@ describe("hand-written agent loop", () => {
     expect(search).toHaveBeenCalledTimes(1);
     expect(result.searchCount).toBe(2);
     expect(toolResults(model, 1)[0]).toMatchObject({ tool_use_id: "batch-1", is_error: false });
-    expect(options.events.map(({ event }) => event)).toEqual(["status", "status", "sources", "delta", "done"]);
+    expect(options.events.map(({ event }) => event)).toEqual(["status", "status", "sources", "answer_ui", "delta", "done"]);
     expect(options.events[0]).toEqual({ event: "status", data: { id: "s1", kind: "search", queries: ["HubSpot pricing", "Pipedrive pricing"], state: "running", count: 0 } });
     expect(options.events[1]).toEqual({ event: "status", data: { id: "s1", kind: "search", queries: ["HubSpot pricing", "Pipedrive pricing"], state: "done", count: 2 } });
     expect(result.sources[0]).toEqual({ url: "https://example.com/HubSpot", title: "HubSpot pricing", domain: "example.com", publishedDate: "2026-11-14T00:00:00.000Z", isOfficial: false });

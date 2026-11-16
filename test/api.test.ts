@@ -1,3 +1,4 @@
+import { buildRichAnswer } from "../lib/answer-blocks";
 import { readChatStream } from "../lib/chat-stream";
 import { createTestStore } from "./database";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,6 +70,20 @@ describe("chat and history backend with real Postgres and fake model", () => {
     expect(app.logger.info).toHaveBeenCalledOnce();
     expect(app.logger.info.mock.calls[0][0]).toMatchObject({ recallMs: 0, ttftMs: 0, searchCount: 0, totalMs: 0, userPersisted: true, assistantPersisted: true });
   });
+  it("publishes and persists a sourced presentation before done", async () => {
+    const answerUi = buildRichAnswer([{ url: "https://example.com/movie", domain: "example.com", title: "Movie", publishedDate: null, isOfficial: false }], {});
+    const app = harness({ run: options => {
+      options.send("answer_ui", answerUi);
+      return runAgent({ ...options, model: new FakeModel([{ text: ["See [the interview](https://example.com/movie)."] }]) });
+    } });
+    const response = await app.handler(post({ message: "Explain a movie", tz: "UTC" }));
+    const body = await response.text();
+    expect(body.indexOf("event: answer_ui")).toBeLessThan(body.indexOf("event: done"));
+    await app.flush();
+    expect((await store.historyFor(userId))[0].answerUi).toEqual(answerUi);
+    expect(app.logger.info.mock.calls[0][0]).toMatchObject({ snapshotBytes: Buffer.byteLength(JSON.stringify(answerUi)), ttftMs: 0 });
+  });
+
   it("passes answer detail through the API and safely streams and saves a long Unicode answer", async () => {
     const text = `${"x".repeat(4095)}🙂${"\"\n".repeat(80_000)}`;
     const model = new FakeModel([{ text: [text] }]);
@@ -349,6 +364,9 @@ describe("chat and history backend with real Postgres and fake model", () => {
     expect(JSON.stringify(model.requests[0].system)).not.toContain("When did I ask");
     expect(model.requests.every(request => request.tools?.length === 1)).toBe(true);
     await app.flush(); expect(background).not.toHaveBeenCalled();
+    const saved = (await store.historyFor(userId))[0];
+    expect(saved.answerUi?.sources[0].url).toBe("https://neon.com/pricing");
+    expect(saved.content.slice(saved.answerUi?.externalStart)).toBe("Current Neon prices need the official pricing page. [Source](https://neon.com/pricing)");
   });
 
   it.each(["gemini", "anthropic"] as const)("plans and lists all of today's user messages across chats with %s without answer/search/curation calls", async provider => {

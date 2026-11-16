@@ -6,7 +6,7 @@ import type { AgentModel, ModelReply, ModelRequest, ModelStream } from "../lib/a
 
 export const clock: Clock = { instant: dateFrom("2026-11-15T12:00:00Z"), iso: "2026-11-15T12:00:00.000Z", human: "Sunday 15 November 2026, 12:00 (UTC)", tz: "UTC" };
 export const turn = (id: number, overrides: Partial<Turn> = {}): Turn => ({
-  id, userId: "alice", sessionId: "one", role: "user", content: "Which CRM?", ts: dateFrom("2026-11-09T12:00:00Z"), tz: "UTC", tsv: null, ...overrides,
+  id, userId: "alice", sessionId: "one", role: "user", content: "Which CRM?", ts: dateFrom("2026-11-09T12:00:00Z"), tz: "UTC", tsv: null, answerUi: null, ...overrides,
 });
 export const claim = (overrides: Partial<Claim> = {}): Claim => ({
   id: 1, turnId: 2, userId: "alice", subject: "HubSpot", attribute: "price", value: "$20/seat/mo",

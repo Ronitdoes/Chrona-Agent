@@ -33,6 +33,6 @@ it("refreshes an old globally cached store and migrates its existing connection 
     expect((await ready.historyFor("alice", { sessionId: "one" })).map(turn => turn.content)).toEqual([source.content]);
     expect(staleHistory).not.toHaveBeenCalled();
     const versions = await original.db.execute<{ version: number }>(sql`SELECT version FROM web_agent_migrations ORDER BY version`);
-    expect(versions.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(versions.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   } finally { await original.close(); }
 });

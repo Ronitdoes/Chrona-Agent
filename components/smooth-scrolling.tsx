@@ -23,13 +23,13 @@ export function SmoothScrolling() {
 }
 
 /** The app uses independent overflow panels rather than a scrolling document. */
-export function useSmoothScroll(wrapper: RefObject<HTMLElement | null>, content: RefObject<HTMLElement | null>, enabled = true) {
+export function useSmoothScroll(wrapper: RefObject<HTMLElement | null>, content: RefObject<HTMLElement | null>, enabled = true, orientation: "vertical" | "horizontal" = "vertical") {
   const instance = useRef<Lenis | null>(null);
   useEffect(() => {
     if (!enabled || !wrapper.current || !content.current) return;
-    const lenis = new Lenis({ ...options, wrapper: wrapper.current, content: content.current });
+    const lenis = new Lenis({ ...options, orientation, gestureOrientation: orientation, wrapper: wrapper.current, content: content.current });
     instance.current = lenis;
     return () => { instance.current = null; lenis.destroy(); };
-  }, [wrapper, content, enabled]);
+  }, [wrapper, content, enabled, orientation]);
   return instance;
 }

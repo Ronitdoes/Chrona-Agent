@@ -87,6 +87,9 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     let closed = false;
     let sentDone = false;
     let assistantText = "";
+    let answerUi: import("./answer-blocks").RichAnswerV1 | undefined;
+    let firstVisualMs: number | undefined;
+    let snapshotBytes = 0;
     let assistantAt = calendar.instant;
     let recallMs = 0;
     let ttftMs: number | undefined;
@@ -113,7 +116,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           const user = await userWrite;
           if ("failed" in user) failure ??= "user_persistence";
           else if (assistantText) {
-            const saved = await store.saveTurn({ userId: session.userId, sessionId: session.sessionId, role: "assistant", content: assistantText, ts: assistantAt, tz: calendar.tz,
+            const saved = await store.saveTurn({ userId: session.userId, sessionId: session.sessionId, role: "assistant", content: assistantText, answerUi, ts: assistantAt, tz: calendar.tz,
               ...(!skipCuration ? { curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) } } : {}),
               ...(recallSourceIds !== undefined && !failure && !abort.signal.aborted ? { recall: { userTurnId: user.turn.id, sourceTurnIds: recallSourceIds, historyOnly: answerMode === "history", collection: recallCollection } } : {}),
             });
@@ -128,7 +131,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           try { if (!skipCuration) curation = await deps.curate(session.userId, { store, turnId: assistantTurnId, clock: () => deps.clock(calendar.tz), selection }); }
           catch { curation = { completed: 0, failed: 1, deferred: false }; }
           trace[failure ? "error" : "info"]({
-            turnId, userTurnId, assistantTurnId, recallMs, ttftMs: ttftMs ?? 0, searchCount, totalMs,
+            turnId, userTurnId, assistantTurnId, firstVisualMs, snapshotBytes, recallMs, ttftMs: ttftMs ?? 0, searchCount, totalMs,
             userPersisted: userTurnId !== undefined, assistantPersisted, cancelled: abort.signal.aborted, failure: failure ?? null,
             curation,
             modelFailures,
@@ -162,6 +165,11 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const send: SendEvent = (event, data) => {
+          if (event === "answer_ui") {
+            answerUi = data as AgentEvents["answer_ui"];
+            snapshotBytes = Buffer.byteLength(JSON.stringify(answerUi), "utf8");
+            if (answerUi.images.length) firstVisualMs ??= Math.max(0, deps.time() - started);
+          }
           if (event === "delta") {
             const delta = data as AgentEvents["delta"];
             if (delta.text) ttftMs ??= Math.max(0, deps.time() - started);
@@ -279,10 +287,15 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
               }
               const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started), input.answerDetail);
               if (!budgets) { send("delta", { text: `${historyText}\n\nThe time budget was used checking history; the current external facts remain unverified.` }); return; }
-              const result = await deps.run({ ...prompt, send: (event, data) => { if (event !== "delta" && event !== "done") send(event, data); }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
+              let externalUi: AgentEvents["answer_ui"] | undefined;
+              const result = await deps.run({ ...prompt, send: (event, data) => {
+                if (event === "answer_ui") externalUi = data as AgentEvents["answer_ui"];
+                else if (event !== "delta" && event !== "done") send(event, data);
+              }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
               searchCount = result.searchCount; evidence = result.evidence; modelFailures = result.modelFailures;
               abort.signal.throwIfAborted();
               send("delta", { text: `${historyText}\n\n${result.text}` });
+              if (externalUi) send("answer_ui", { ...externalUi, externalStart: historyText.length + 2 });
               return;
             }
             const recalled = await deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore });

@@ -1,3 +1,4 @@
+import { richAnswerSchema } from "./answer-blocks";
 import type { AnswerDetail } from "./answer-detail";
 import { z } from "zod";
 import type { ModelSelection } from "./model-selection";
@@ -12,12 +13,13 @@ export const chatEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sources"), data: z.array(z.object({
     url: z.string(), title: z.string(), domain: z.string(), publishedDate: z.string().nullable(), isOfficial: z.boolean(),
   })) }),
+  z.object({ type: z.literal("answer_ui"), data: richAnswerSchema }),
   z.object({ type: z.literal("done"), data: z.object({ turnId: z.string(), ttftMs: z.number().nonnegative(), totalMs: z.number().nonnegative() }) }),
   z.object({ type: z.literal("error"), data: z.object({ message: z.string() }) }),
 ]);
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 export class ChatStreamError extends Error {}
-const knownEvents = new Set(["delta", "status", "sources", "done", "error"]);
+const knownEvents = new Set(["delta", "status", "sources", "answer_ui", "done", "error"]);
 const maxFrame = 131_072;
 
 /** Incremental SSE framing, including CRLF split across chunks and multiline data. */

@@ -8,6 +8,7 @@ const responseSchema = z.object({ results: z.array(z.object({
   publishedDate: z.string().nullish(),
   text: z.string().nullish(),
   highlights: z.array(z.string()).nullish(),
+  extras: z.object({ richImageLinks: z.array(z.object({ url: z.string(), alt: z.string().optional() }).catch({ url: "" })).catch([]).optional() }).catch({}).optional(),
 })) });
 
 export function startPublishedDate(request: Pick<SearchRequest, "recency" | "since" | "instant">): string | undefined {
@@ -36,6 +37,7 @@ export function createExaProvider(apiKey: string, fetcher: Fetch = globalThis.fe
           ...(request.topic === "news" ? { category: "news" } : {}),
           contents: {
             highlights: true,
+            ...(request.include_images ? { extras: { richImageLinks: 2 } } : {}),
             ...(request.depth === "deep" ? { text: { maxCharacters: 12_000 } } : {}),
           },
           // Exa includeDomains restricts; boost official sources locally instead.
@@ -48,6 +50,7 @@ export function createExaProvider(apiKey: string, fetcher: Fetch = globalThis.fe
         title: result.title ?? result.url,
         url: result.url,
         published_date: result.publishedDate,
+        ...(request.include_images ? { images: result.extras?.richImageLinks ?? [] } : {}),
         snippet: result.highlights?.join("\n") ?? result.text?.slice(0, 1200) ?? "",
         ...(request.depth === "deep" ? { content: result.text } : {}),
       }));

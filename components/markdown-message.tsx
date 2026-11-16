@@ -4,6 +4,8 @@ import { Children, isValidElement, useEffect, useRef, useState, type ComponentPr
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
+import { canonicalUrl } from "../lib/tools/results";
+import type { RichAnswerV1 } from "../lib/answer-blocks";
 import { remarkResearchAnnotations } from "../lib/research-annotations";
 import { AsOfChip, VerdictBadge } from "./research-badges";
 
@@ -49,6 +51,10 @@ const components: Components = {
   img: ({ alt }) => <span className="text-muted">{alt ? `[Image: ${alt}]` : "[Image]"}</span>,
 };
 
-export function MarkdownMessage({ content }: { content: string }) {
-  return <Markdown remarkPlugins={[remarkGfm, remarkResearchAnnotations]} components={components} skipHtml>{content}</Markdown>;
+export function MarkdownMessage({ content, answerUi }: { content: string; answerUi?: RichAnswerV1 }) {
+  const rendered: Components = { ...components, a: ({ children, href }) => {
+    const index = answerUi?.sources.findIndex(source => source.url === canonicalUrl(href ?? "")) ?? -1;
+    return <a href={href} target="_blank" rel="noopener noreferrer">{children}{index >= 0 ? <sup aria-label={`Source ${index + 1}`}> [{index + 1}]</sup> : null}</a>;
+  } };
+  return <Markdown remarkPlugins={[remarkGfm, remarkResearchAnnotations]} components={rendered} skipHtml>{content}</Markdown>;
 }

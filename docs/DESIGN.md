@@ -408,3 +408,11 @@ deployment provider keys. Search caches exist within that request context.
 The effort popup selects Tavily or Exa. The selected provider runs first and the
 other saved provider can run once after failure. Search SSE status reports the
 actual provider and fallback per query. The model exposes only `web_search`.
+
+## Sourced galleries and citation replay
+
+Citations follow first source admission, allowing streamed prose and reopened chats to use the same numbering. Descriptive Markdown links retain their text and gain a numbered reference when their canonical destination matches a retrieved page. The source footer uses the same numbers.
+
+A versioned companion snapshot keeps the Markdown transcript usable for copying and recall. Full replacement events make duplicate stream delivery idempotent. Invalid saved presentation falls back to the transcript. One gallery holds up to four cards, one per source, appending cards without reordering those already visible. Reserved image space and publisher-link fallbacks keep failures readable.
+
+Images from Tavily and Exa display after HTTPS URL validation and duplicate filtering, associated with publishing pages admitted as evidence. Searches request images by default, and the model can explicitly disable images for text-only research. Publisher links provide attribution, and alt text uses page-provided text when available with a source-title fallback. The first release uses existing search requests and a lead gallery. Diagrams and section-aware anchoring remain future work.

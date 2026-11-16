@@ -3,6 +3,7 @@ export type AgentEvents = {
   status: { id: string; kind: "search"; queries: string[]; state: "running" | "done"; count: number; usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[] };
   delta: { text: string };
   sources: Source[];
+  answer_ui: import("../answer-blocks").RichAnswerV1;
   done: { turnId: string; ttftMs: number; totalMs: number };
   error: { message: string };
 };

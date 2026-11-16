@@ -4,6 +4,7 @@ import type { ChatEvent } from "./chat-stream";
 export type ChatMessage = {
   id: string; role: "user" | "assistant"; content: string;
   state: "streaming" | "complete" | "stopped" | "error";
+  answerUi?: import("./answer-blocks").RichAnswerV1;
   error?: string; sources?: Source[]; searches?: AgentEvents["status"][]; timing?: AgentEvents["done"];
 };
 export type ChatState = { messages: ChatMessage[]; activeId: string | null };
@@ -36,6 +37,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const event = action.event;
       switch (event.type) {
         case "delta": return { ...message, content: message.content + event.data.text };
+        case "answer_ui": return { ...message, answerUi: event.data, sources: event.data.sources };
         case "sources": return { ...message, sources: event.data };
         case "status": return { ...message, searches: [...(message.searches ?? []).filter((search) => search.id !== event.data.id), event.data] };
         case "error": return { ...message, state: "error", error: event.data.message };

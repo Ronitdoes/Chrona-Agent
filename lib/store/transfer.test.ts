@@ -1,3 +1,4 @@
+import { buildRichAnswer } from "../answer-blocks";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTestStore } from "../../test/database";
@@ -35,6 +36,10 @@ function snapshot(version = 5): DatabaseSnapshot {
     },
     sequences: { turns: { lastValue: "9007199254741000", isCalled: true }, claims: { lastValue: "1", isCalled: false }, threads: { lastValue: "8", isCalled: false } },
   };
+  if (version >= 7) {
+    data.tables.turns!.columns.push({ name: "answer_ui", type: "jsonb" });
+    data.tables.turns!.rows.forEach(row => row.push(null));
+  }
   if (version < 5) {
     data.tables.recall_references!.columns.pop(); data.tables.recall_references!.rows.forEach(row => row.pop());
   }
@@ -64,11 +69,29 @@ describe("transactional database transfer", () => {
     expect((await store.db.execute(sql`SELECT count(*)::int AS count FROM turns WHERE tsv @@ websearch_to_tsquery('english', 'CRM')`)).rows[0]).toEqual({ count: 1 });
   });
 
-  it.each([1, 2, 3, 4])("imports version %i into the current schema with new defaults", async version => {
+  it.each([1, 2, 3, 4, 5, 6])("imports version %i into the current schema with new defaults", async version => {
     store = await createTestStore();
     await importSnapshot(store.db, snapshot(version));
-    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
+    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
     if (version === 3) expect((await store.db.execute(sql`SELECT history_only FROM recall_references`)).rows[0]).toEqual({ history_only: true });
+  });
+
+  it("imports v7 presentation data and retains sources in saved history", async () => {
+    store = await createTestStore();
+    const data = snapshot(7);
+    const answerUi = buildRichAnswer([{ url: "https://example.com/movie", title: "Movie", domain: "example.com", publishedDate: null, isOfficial: false }], {});
+    const encoded = await store.db.execute<{ value: string }>(sql`SELECT ${JSON.stringify(answerUi)}::jsonb::text AS value`);
+    data.tables.turns!.rows[1][7] = encoded.rows[0].value;
+    await importSnapshot(store.db, data);
+    expect((await store.db.execute(sql`SELECT answer_ui FROM turns WHERE role = 'assistant'`)).rows[0]).toEqual({ answer_ui: answerUi });
+  });
+
+  it("saves presentation and transcript together", async () => {
+    store = await createTestStore();
+    const answerUi = buildRichAnswer([], {});
+    const saved = await store.saveTurn({ userId: "alice", sessionId: "one", role: "assistant", content: "Partial answer", answerUi });
+    expect((await store.historyFor("alice"))[0]).toMatchObject({ id: saved.id, content: "Partial answer", answerUi });
+    expect(await store.historyFor("bob")).toEqual([]);
   });
 
   it("imports empty tables without consuming initial sequence values", async () => {

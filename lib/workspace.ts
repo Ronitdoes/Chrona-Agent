@@ -1,9 +1,10 @@
+import { readRichAnswer } from "./answer-blocks";
 import { z } from "zod";
 import { dateFrom } from "./clock";
 import type { HistorySession } from "./history";
 import type { ChatMessage } from "./chat-state";
 
-const turnSchema = z.object({ id: z.number().int(), role: z.enum(["user", "assistant"]), content: z.string(), ts: z.iso.datetime({ offset: true }), tz: z.string().nullable() });
+const turnSchema = z.object({ id: z.number().int(), role: z.enum(["user", "assistant"]), content: z.string(), ts: z.iso.datetime({ offset: true }), tz: z.string().nullable(), answerUi: z.unknown().transform(readRichAnswer).optional() });
 export const historyPageSchema = z.object({
   sessions: z.array(z.object({ id: z.uuid(), title: z.string(), lastTs: z.iso.datetime({ offset: true }), days: z.array(z.object({ date: z.iso.date(), turns: z.array(turnSchema) })) })),
   nextCursor: z.string().nullable(), now: z.iso.datetime({ offset: true }), tz: z.string(), activeSessionId: z.uuid(),
@@ -28,7 +29,7 @@ export function greeting(iso: string, tz: string): string {
 }
 export function sessionMessages(session?: HistorySession): ChatMessage[] {
   return session ? session.days.flatMap(day => day.turns).sort((a, b) => a.ts.localeCompare(b.ts) || a.id - b.id)
-    .map(turn => ({ id: `saved-${turn.id}`, role: turn.role, content: turn.content, state: "complete" })) : [];
+    .map(turn => ({ id: `saved-${turn.id}`, role: turn.role, content: turn.content, answerUi: turn.answerUi, sources: turn.answerUi?.sources, state: "complete" })) : [];
 }
 export function mergeHistory(current: HistorySession[], incoming: HistorySession[]): HistorySession[] {
   const sessions = new Map<string, HistorySession>();

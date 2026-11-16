@@ -17,6 +17,7 @@ export const turns = pgTable("turns", {
   content: text("content").notNull(),
   ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
   tz: text("tz"),
+  answerUi: jsonb("answer_ui").$type<import("../answer-blocks").RichAnswerV1>(),
   tsv: tsvector("tsv").generatedAlwaysAs(
     (): SQL => sql`to_tsvector('english', ${turns.content})`,
   ),

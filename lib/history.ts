@@ -1,3 +1,4 @@
+import { readRichAnswer } from "./answer-blocks";
 import { z } from "zod";
 import { dateFrom } from "./clock";
 import type { Turn } from "./store/schema";
@@ -17,7 +18,7 @@ export function decodeCursor(raw: string): HistoryCursor {
   } catch { throw new Error("Invalid history cursor"); }
 }
 
-export type HistoryTurn = Pick<Turn, "id" | "role" | "content" | "tz"> & { ts: string };
+export type HistoryTurn = Pick<Turn, "id" | "role" | "content" | "tz"> & { ts: string; answerUi?: import("./answer-blocks").RichAnswerV1 };
 export type HistorySession = { id: string; title: string; lastTs: string; days: { date: string; turns: HistoryTurn[] }[] };
 
 /** Groups a page into sessions, then local calendar days; no clock reads or I/O. */
@@ -31,7 +32,7 @@ export function groupHistory(turns: readonly Turn[], tz: string): HistorySession
     const parts = Object.fromEntries(formatter.formatToParts(turn.ts).map(({ type, value }) => [type, value]));
     const day = `${parts.year}-${parts.month}-${parts.day}`;
     if (!session.days.has(day)) session.days.set(day, []);
-    session.days.get(day)!.push({ id: turn.id, role: turn.role, content: turn.content, ts: turn.ts.toISOString(), tz: turn.tz });
+    session.days.get(day)!.push({ id: turn.id, role: turn.role, content: turn.content, ts: turn.ts.toISOString(), tz: turn.tz, answerUi: readRichAnswer(turn.answerUi) });
   }
   return [...sessions].map(([id, { rows, days }]) => ({
     id, title: (rows.find((turn) => turn.role === "user")?.content ?? rows[0].content).replace(/\s+/g, " ").trim().slice(0, 80),

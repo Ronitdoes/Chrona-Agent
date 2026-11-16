@@ -5,7 +5,7 @@ import { BadgeCheck, ExternalLink, Globe2 } from "lucide-react";
 import type { Source } from "../lib/agent/events";
 import { displayDate, sourceDetails } from "../lib/research-ui";
 
-export function SourceChip({ source, favicon }: { source: Source; favicon?: string | false }) {
+export function SourceChip({ source, favicon, number }: { source: Source; number?: number; favicon?: string | false }) {
   const id = useId();
   const [failed, setFailed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -17,6 +17,7 @@ export function SourceChip({ source, favicon }: { source: Source; favicon?: stri
     <span className="source-wrapper" onMouseEnter={() => setDismissed(false)} onFocus={() => setDismissed(false)}
       onKeyDown={(event) => { if (event.key === "Escape") setDismissed(true); }}>
       <a className="source-chip" href={details.url} target="_blank" rel="noopener noreferrer" aria-describedby={dismissed ? undefined : id}>
+        {number ? <span>[{number}]</span> : null}
         {image && !failed ? (
           // A small, unoptimized same-source favicon needs native error handling and no remote-image allowlist.
           // eslint-disable-next-line @next/next/no-img-element
@@ -35,10 +36,10 @@ export function SourceChip({ source, favicon }: { source: Source; favicon?: stri
   );
 }
 
-export function SourceChips({ sources, localFavicons = false }: { sources: Source[]; localFavicons?: boolean }) {
+export function SourceChips({ sources, localFavicons = false, numbered = false }: { sources: Source[]; localFavicons?: boolean; numbered?: boolean }) {
   const unique = [...new Map(sources.filter((source) => sourceDetails(source)).map((source) => [source.url, source])).values()];
   if (!unique.length) return null;
   return <div aria-label="Sources" className="relative mt-5 flex flex-wrap gap-2 font-sans">
-    {unique.map((source, index) => <SourceChip key={source.url} source={source} favicon={localFavicons ? index === 0 ? "/demo-source.svg" : false : undefined} />)}
+    {unique.map((source, index) => <SourceChip key={source.url} source={source} number={numbered ? index + 1 : undefined} favicon={localFavicons ? index === 0 ? "/demo-source.svg" : false : undefined} />)}
   </div>;
 }

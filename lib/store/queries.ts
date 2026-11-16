@@ -1,3 +1,4 @@
+import { richAnswerSchema } from "../answer-blocks";
 import { and, asc, desc, eq, getTableColumns, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { now, type Clock } from "../clock";
@@ -10,6 +11,7 @@ import { collectionContains, collectionSchema, type RecallCollection } from "../
 export type StoreDatabase = NodePgDatabase<typeof schema>;
 export const USER_MEMORY_LOCK = 781424;
 export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionId" | "role" | "content"> & {
+  answerUi?: import("../answer-blocks").RichAnswerV1;
   requireOwnedConversation?: boolean;
   ts?: Date;
   tz?: string;
@@ -82,6 +84,7 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
 
     async saveTurn(input: SaveTurnInput) {
       scopedUser(input.userId);
+      if (input.answerUi) richAnswerSchema.parse(input.answerUi);
       const current = input.ts ? undefined : clock();
       const { curation, recall, requireOwnedConversation, ...fields } = input;
       const values = {
