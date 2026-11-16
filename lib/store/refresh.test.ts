@@ -14,7 +14,7 @@ it("refreshes an old globally cached store and migrates its existing connection 
     const source = await original.saveTurn({ userId: "alice", sessionId: "one", role: "user", content: "Check Neon pricing", ts: clock.instant });
     // Reproduce a server started before the recall queries and migrations existed.
     await original.db.execute(sql`DROP TABLE recall_references`);
-    await original.db.execute(sql`DELETE FROM web_agent_migrations WHERE version >= 3`);
+    await original.db.execute(sql`DELETE FROM web_agent_migrations WHERE version >= 3 AND version <= 5`);
     const staleHistory = vi.fn(async () => { throw new Error("stale query implementation"); });
     const close = vi.fn(original.close);
     shared.webAgentStore = Promise.resolve({ ...original, close, historyFor: staleHistory,
@@ -33,6 +33,6 @@ it("refreshes an old globally cached store and migrates its existing connection 
     expect((await ready.historyFor("alice", { sessionId: "one" })).map(turn => turn.content)).toEqual([source.content]);
     expect(staleHistory).not.toHaveBeenCalled();
     const versions = await original.db.execute<{ version: number }>(sql`SELECT version FROM web_agent_migrations ORDER BY version`);
-    expect(versions.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(versions.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
   } finally { await original.close(); }
 });

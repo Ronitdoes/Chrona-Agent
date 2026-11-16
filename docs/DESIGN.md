@@ -21,7 +21,7 @@ server. Node instrumentation waits for storage initialization before requests.
 
 ```mermaid
 flowchart TD
-  UI[Chat UI] --> API[Node API: validate request and anonymous identity]
+  UI[Chat UI] --> API[Node API: validate request and signed-in account]
   API --> Save[Persist user message]
   API --> Plan[Structured intent and reference planning]
   Plan --> List[Read bounded new or exact previous collection]
@@ -194,8 +194,13 @@ independent of an application response lifecycle.
 
 ## Batched search and bounded inference
 
-`web_search` accepts a query array and search preferences. Tavily is primary;
-Exa is an optional configured fallback. Fan-out, concurrency, cache expiry,
+The model-call budget reserves a final synthesis turn and, when space permits,
+one correction for a late search request. This bounds provider spending while
+letting a model finish from retrieved evidence. Query and wall-time limits still
+apply. Gemini receives explicit function-calling mode `NONE` for synthesis.
+
+`web_search` accepts a query array and search preferences. The account selects
+Tavily or Exa as primary. The other saved provider is eligible for fallback. Fan-out, concurrency, cache expiry,
 deduplication, page extraction and output truncation are ordinary functions
 behind that one model-facing contract. Deep content retrieval is a provider
 option rather than another tool.
@@ -215,11 +220,36 @@ searches. Authentication and rejected requests are not silently retried. Numeric
 Retry-After delays must fit the remaining budget. Cancellation aborts ongoing
 work, and terminal output remains explicit about unavailable evidence.
 
-| Effort | Queries | Sources | Answer-model calls | Request time | Final reserve | Output tokens per answer call |
-|---|---:|---:|---:|---:|---:|---:|
-| Instant | 2 | 2 | 3 | 30 s | 8 s | 1,024 |
-| Medium | 5 | 5 | 4 | 45 s | 10 s | 2,048 |
-| High | 10 | 10 | 4 | 90 s | 15 s | 4,096 |
+| Effort | Queries | Sources | Answer-model calls | Research and context time | Base final reserve |
+|---|---:|---:|---:|---:|---:|
+| Instant | 2 | 2 | 3 | 30 s | 8 s |
+| Medium | 5 | 5 | 4 | 45 s | 10 s |
+| High | 10 | 10 | 4 | 90 s | 15 s |
+
+Search provider, answer detail and research effort use compact segmented rows
+in one popup. All options fit without internal scrolling. Supporting descriptions
+are available as button tooltips, with the selected research quota shown inline.
+On short screens the popup sits within the viewport.
+
+Answer detail is an independent browser preference scoped to the account. Auto
+adapts to the request, Brief favors essential points, and Detailed develops each
+requested point with relevant background, reasoning, examples and citations.
+Explicit current-request instructions override the preference. This avoids using
+search effort as a proxy for answer length.
+
+Generation gets an additional final-only reserve of 30 seconds for Brief,
+120 seconds for Auto or 240 seconds for Detailed. Adding the same allowance to
+the total deadline preserves the research deadline. Preparation time is still
+subtracted. The route's maximum duration is 360 seconds, while the largest normal
+request allowance is 330 seconds.
+
+Google documents a 65,536-token output limit for `gemini-3.5-flash-lite`, which is
+the ceiling sent for this model. Other model IDs use 8,192 tokens. These are
+allowances rather than desired response lengths. Final correction preserves the
+selected detail. Provider-failure recovery stays short and bounded. Streamed
+partial answers and explicit limit errors preserve the result if generation ends
+early. [Google model documentation](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite)
+
 
 Planning and evidence selection consume the same request time budget but are
 separate from the answer-model-call count. Source counts are caps, not quotas.
@@ -238,6 +268,9 @@ activity remain distinct so color is never the only signal.
 
 Theme selection applies before paint and follows the system when requested. A
 native mobile dialog supplies focus management and dismissal for navigation.
+Account actions live in a fixed sidebar footer, shared with the mobile drawer.
+Its upward-opening popup contains API keys and Sign out, with keyboard navigation,
+Escape dismissal and visible sign-out failure feedback.
 The app provides visible keyboard focus, a skip link, labeled controls, offline
 states, retries, stop/cancel controls and an explicit deletion confirmation.
 Pinned chats, model choice and effort are browser preferences rather than
@@ -254,8 +287,11 @@ Streaming auto-follow updates the target immediately, yields when the user reads
 earlier text, and resumes through Jump to latest. A stable viewport class avoids
 overwriting Lenis-managed classes when the empty view becomes a conversation.
 
-The ASCII workspace background is a procedural glyph field with fixed coordinates
-for hydration, a quiet reading center, SVG/CSS texture and a reduced-motion path.
+The ASCII workspace background renders two warped wave fields with slowly
+varying directions and continuous seeded dithering at ten frames per second.
+The wave geometry and grain are deterministic for hydration, and subdued contrast
+keeps the reading center quiet. Reduced motion freezes the field, and hidden
+tabs pause updates. The SVG remains decorative and ignores pointer input.
 Pending history, pagination, conversation loading, model settings and the first
 response text use shared skeletons shaped like the content they replace. Loaded
 history remains visible during background refreshes. Conversation loading keeps
@@ -277,12 +313,11 @@ provider failure categories and recall provenance/coverage. Trace construction
 does not include full private messages, provider response bodies, API keys or
 connection strings. Tool-call count and query count are different metrics.
 
-HttpOnly, SameSite=Lax anonymous cookies provide local continuity. They are
-Secure in production or over HTTPS, but are not signed-in account identity.
-One active request per user and per-process rate admission protect sequencing;
-they are not distributed account security. Direct database access, public
-multi-user deployment, cross-device recovery and account management require
-additional design work.
+Better Auth uses HttpOnly, SameSite cookies with Secure enabled in production.
+Database sessions determine account identity. Route handlers enforce ownership
+and mutation origins. One active request per account and per-process rate limits
+protect sequencing. Multi-instance deployments need shared admission limits.
+Email verification and password recovery are outside this release.
 
 ## Tradeoffs and conditions for revisiting them
 
@@ -294,7 +329,7 @@ additional design work.
 | One search tool and handwritten loop | Explicit execution and cancellation; adapters need maintenance | Specialized tools or a framework | Product requirements explicitly change the tool constraint or justify framework complexity |
 | Docker Postgres and one driver | Real SQL parity; database service required | Embedded storage | A supported environment cannot run the current database setup |
 | Deferred persisted curation | Extraction stays off the response path; shutdown can interrupt work | Independent worker queue | Hosting guarantees or throughput require autonomous retries |
-| Anonymous cookies and local admission | Simple local continuity; no account or distributed guarantees | Authenticated accounts, RLS and shared admission | The app is exposed to untrusted users or multiple serving instances |
+| Better Auth database sessions and local admission | Private accounts with simple process-local request sequencing | Shared admission and distributed rate limits | Multiple serving instances are deployed |
 | Lenis with native interaction fallbacks | Consistent wheel motion; adds client animation work | Entirely native scrolling | Measured responsiveness or accessibility needs favor native-only behavior |
 | Recorded evals plus a small live check | Reproducible integration checks; limited model-quality evidence | Broad live benchmark | A release needs accuracy distributions or provider latency comparisons |
 
@@ -350,3 +385,22 @@ uncommitted source; private settings, local database files and installed/build
 artifacts are excluded. Reports remain in ignored `data/ship-check/`. Images,
 packages and build-time fonts require network access. Paid provider checks are
 explicit opt-ins and never part of the ordinary test command.
+
+## Authenticated accounts and personal providers
+
+Better Auth owns email/password login sessions in Postgres. Every private API and
+page verifies the session. Conversation UUIDs in `/chat/[sessionId]` address
+server-created, account-owned conversations. The URL supplies the conversation,
+while the authenticated session supplies the owner for history, recall, deletion
+and credential operations. Anonymous records remain unassigned and inaccessible.
+
+API keys settings requires one LLM key and one search key before sending. Stored
+credentials use AES-256-GCM with account/provider authenticated data and a fresh
+nonce. Reads return configured-provider status. Request-local AsyncLocalStorage
+carries personal provider configuration through answer generation, recall and
+explicitly rebound deferred curation callbacks. The web path never falls back to
+deployment provider keys. Search caches exist within that request context.
+
+The effort popup selects Tavily or Exa. The selected provider runs first and the
+other saved provider can run once after failure. Search SSE status reports the
+actual provider and fallback per query. The model exposes only `web_search`.

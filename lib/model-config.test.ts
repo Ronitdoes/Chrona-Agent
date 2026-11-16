@@ -6,7 +6,7 @@ beforeAll(async () => { vi.stubEnv("MODEL_PROVIDER", "gemini"); vi.stubEnv("GEMI
 afterAll(() => vi.unstubAllEnvs());
 describe("model selection", () => {
   it("publishes IDs and availability without exposing keys", async () => {
-    const config = loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "secret-gemini", TAVILY_API_KEY: "secret-search" });
+    const config = loadEnv({ BETTER_AUTH_SECRET: "test-auth-secret-with-at-least-32-characters", API_KEY_ENCRYPTION_KEY: "11".repeat(32), DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "secret-gemini", TAVILY_API_KEY: "secret-search" });
     const catalog = modelCatalog(config);
     expect(catalog.default.provider).toBe("gemini");
     expect(catalog.providers.map(provider => provider.id)).toEqual(["anthropic", "gemini"]);

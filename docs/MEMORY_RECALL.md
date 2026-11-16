@@ -181,3 +181,22 @@ Generated external prose is not a universal deterministic verification surface.
 The current evaluation sets are regression evidence, not a production accuracy
 benchmark. Consider hybrid/vector retrieval only after labeled evaluations
 demonstrate candidate-recall gaps; it cannot replace the evidence contract.
+
+## Authenticated accounts and personal providers
+
+Better Auth owns email/password login sessions in Postgres. Every private API and
+page verifies the session. Conversation UUIDs in `/chat/[sessionId]` address
+server-created, account-owned conversations. The URL supplies the conversation,
+while the authenticated session supplies the owner for history, recall, deletion
+and credential operations. Anonymous records remain unassigned and inaccessible.
+
+API keys settings requires one LLM key and one search key before sending. Stored
+credentials use AES-256-GCM with account/provider authenticated data and a fresh
+nonce. Reads return configured-provider status. Request-local AsyncLocalStorage
+carries personal provider configuration through answer generation, recall and
+explicitly rebound deferred curation callbacks. The web path never falls back to
+deployment provider keys. Search caches exist within that request context.
+
+The effort popup selects Tavily or Exa. The selected provider runs first and the
+other saved provider can run once after failure. Search SSE status reports the
+actual provider and fallback per query. The model exposes only `web_search`.

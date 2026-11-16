@@ -6,7 +6,7 @@ import Link from "next/link";
 import { AppLogo } from "./app-logo";
 import { WorkspaceBackground } from "./workspace-background";
 
-export function AppShell({ children, sidebar }: { children: ReactNode; sidebar?: ReactNode }) {
+export function AppShell({ children, sidebar, sidebarFooter }: { children: ReactNode; sidebar?: ReactNode; sidebarFooter?: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawer = useRef<HTMLDialogElement>(null);
@@ -24,11 +24,12 @@ export function AppShell({ children, sidebar }: { children: ReactNode; sidebar?:
     <a href="#workspace" className="fixed left-4 top-4 z-50 -translate-y-24 rounded-lg bg-foreground px-4 py-2 text-background focus:translate-y-0">Skip to content</a>
     <aside id="app-sidebar" aria-label="Sidebar" className={`w-(--sidebar-width) shrink-0 flex-col border-r border-border bg-background px-3 py-4 ${sidebarOpen ? "hidden md:flex" : "hidden"}`}>
       <div className="flex items-center justify-between gap-2">{brand}<button type="button" className="icon-button" aria-label="Collapse sidebar" onClick={() => setSidebarOpen(false)}><PanelLeftClose size={17} aria-hidden="true" /></button></div>{navigation}
+      {sidebarFooter ? <footer className="mt-auto shrink-0 border-t border-border pt-3">{sidebarFooter}</footer> : null}
     </aside>
     <dialog ref={drawer} aria-label="Conversation navigation" onClose={() => { setDrawerOpen(false); trigger.current?.focus(); }}
       onClick={event => { if (event.target === event.currentTarget || (event.target as Element).closest("[data-close-drawer]")) close(); }}
       className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-[min(85vw,280px)] max-w-none border-0 border-r border-border bg-background p-0 text-foreground backdrop:bg-black/40">
-      <div className="flex h-full flex-col px-4 py-6"><div className="flex items-center justify-between gap-2">{brand}<button type="button" aria-label="Close navigation" onClick={close} className="icon-button"><X size={18} aria-hidden="true" /></button></div>{navigation}</div>
+      <div className="flex h-full flex-col px-4 py-6"><div className="flex items-center justify-between gap-2">{brand}<button type="button" aria-label="Close navigation" onClick={close} className="icon-button"><X size={18} aria-hidden="true" /></button></div>{navigation}{sidebarFooter ? <footer className="mt-auto shrink-0 border-t border-border pt-3">{sidebarFooter}</footer> : null}</div>
     </dialog>
     <div className="workspace-stage flex min-w-0 flex-1 flex-col">
       <WorkspaceBackground />

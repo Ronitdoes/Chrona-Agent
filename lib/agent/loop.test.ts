@@ -76,7 +76,7 @@ describe("hand-written agent loop", () => {
     expect(result.evidence).toHaveLength(profile.maxSources);
     expect(model.requests.every(request => request.researchEffort === effort)).toBe(true);
     expect(model.requests.at(-1)?.tool_choice).toEqual({ type: "none" });
-    expect(model.requests[0].max_tokens).toBe(profile.outputTokens);
+    expect(model.requests[0].max_tokens).toBe(8192);
   });
 
   it("requires web_search for a live score, then restores normal routing after results", async () => {
@@ -131,7 +131,7 @@ describe("hand-written agent loop", () => {
     expect(result.text).toBe("Here are the dated findings.");
   });
 
-  it("enforces four model steps and disables tools on the last step", async () => {
+  it("reserves final synthesis and one correction within four model steps", async () => {
     const model = new FakeModel([
       ...Array.from({ length: 3 }, (_, i) => ({ tools: [{ input: { queries: [`Query ${i}`] } }] })),
       { text: ["Partial findings."] },
@@ -140,13 +140,34 @@ describe("hand-written agent loop", () => {
     const search = vi.fn(async (input: unknown) => response((input as { queries: string[] }).queries));
     const result = await runAgent({ ...options, search, time: () => 0 });
     expect(model.requests).toHaveLength(4);
-    expect(search).toHaveBeenCalledTimes(3);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(model.requests[2].tool_choice).toEqual({ type: "none" });
+    expect(toolResults(model, 3)[0]).toMatchObject({ is_error: true });
     expect(model.requests[3].tool_choice).toEqual({ type: "none" });
     expect(model.requests[3].tools?.map((tool) => "name" in tool ? tool.name : undefined)).toEqual(["web_search"]);
     expect(JSON.stringify(model.requests[3].system)).toContain("Answer now");
     expect(result.text).not.toContain("step limit");
     expect(result.limits).not.toContain("step limit");
     expect(options.events.filter((event) => event.event === "done")).toHaveLength(1);
+  });
+
+  it.each(["auto", "brief", "detailed"] as const)("preserves %s detail through final correction within the four-call limit", async answerDetail => {
+    const model = new FakeModel([
+      { tools: [{ input: { queries: ["First check"] } }] },
+      { tools: [{ input: { queries: ["Second check"] } }] },
+      { tools: [{ input: { queries: ["Late check"] } }] },
+      { text: ["A developed answer with explanations, examples and citations."] },
+    ]);
+    const options = setup(model);
+    const result = await runAgent({ ...options, answerDetail, selection: { provider: "gemini", model: "gemini-3.5-flash-lite" }, effort: "high", search: async input => response((input as { queries: string[] }).queries), time: () => 0 });
+    expect(result.text).toContain("developed answer");
+    expect(result.steps).toBe(4);
+    expect(result.searchCount).toBe(2);
+    expect(model.requests.every(request => request.max_tokens === 65_536 && request.tools?.length === 1)).toBe(true);
+    expect(JSON.stringify(model.requests.at(-1)?.system)).toContain("take precedence over this saved preference");
+    expect(toolResults(model, 3)[0].content).toContain("Preserve the requested answer detail");
+    expect(toolResults(model, 3)[0].content).not.toContain("Give a concise answer");
+    expect(options.events.some(event => event.event === "error")).toBe(false);
   });
 
   it("finishes a score-today lookup after two fresh search passes without chasing more guesses", async () => {
@@ -288,6 +309,30 @@ describe("hand-written agent loop", () => {
     expect(result.limits).toContain("time limit");
   });
 
+  it("lets a direct detailed answer finish in its answer window without regenerating streamed text", async () => {
+    vi.useFakeTimers();
+    let time = 0;
+    const model = new FakeModel([{ text: ["A complete detailed explanation."] }]);
+    const delayed: typeof model = model;
+    const original = model.stream.bind(model);
+    delayed.stream = (request, options) => {
+      const stream = original(request, options);
+      return { ...stream, async *[Symbol.asyncIterator]() {
+        yield* stream;
+        await new Promise(resolve => setTimeout(resolve, 900));
+      } };
+    };
+    const pending = runAgent({ ...setup(delayed), answerDetail: "detailed", time: () => time, budgets: { maxWallMs: 1000, finalReserveMs: 200 } });
+    await vi.advanceTimersByTimeAsync(0);
+    time = 801; await vi.advanceTimersByTimeAsync(801);
+    expect(model.requests).toHaveLength(1);
+    time = 900; await vi.advanceTimersByTimeAsync(99);
+    const result = await pending;
+    expect(result.text).toBe("A complete detailed explanation.");
+    expect(result.limits).not.toContain("time limit");
+    expect(result.steps).toBe(1);
+  });
+
   it("also caps a stalled final stream and still emits a terminal response", async () => {
     vi.useFakeTimers();
     let time = 0;
@@ -323,11 +368,11 @@ describe("hand-written agent loop", () => {
     expect(model.requests[1].tool_choice).toEqual({ type: "none" });
   });
 
-  it("honors caller cancellation immediately without starting another model request", async () => {
+  it.each(["auto", "detailed"] as const)("honors cancellation of %s answers without another model request", async answerDetail => {
     const model = new FakeModel([{ hang: true }]);
     const options = setup(model);
     const controller = new AbortController();
-    const pending = runAgent({ ...options, signal: controller.signal, time: () => 0 });
+    const pending = runAgent({ ...options, answerDetail, signal: controller.signal, time: () => 0 });
     controller.abort();
     const result = await pending;
     expect(model.requests).toHaveLength(1);

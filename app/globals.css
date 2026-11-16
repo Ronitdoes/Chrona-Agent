@@ -150,3 +150,17 @@
     scroll-behavior: auto !important;
   }
 }
+
+
+@media (max-height: 480px) {
+  .effort-panel {
+    position: fixed;
+    inset: auto auto 12px 12px;
+    margin-bottom: 0;
+  }
+}
+
+@media (max-height: 320px) {
+  .effort-panel { gap: 6px; padding: 8px; }
+  .effort-panel button { min-height: 24px; }
+}

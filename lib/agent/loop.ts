@@ -1,3 +1,4 @@
+import { answerDetailInstruction, answerDetailProfiles, answerOutputTokens, type AnswerDetail } from "../answer-detail";
 import { randomUUID } from "node:crypto";
 import type { MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import pTimeout, { TimeoutError } from "p-timeout";
@@ -27,6 +28,7 @@ type RunOptions = {
   time?: () => number; budgets?: Partial<Budgets>;
   selection?: ModelSelection;
   effort?: ResearchEffort;
+  answerDetail?: AnswerDetail;
   clock?: Clock;
 };
 
@@ -35,7 +37,13 @@ export async function runAgent(options: RunOptions) {
   const started = time();
   const elapsed = () => Math.max(0, time() - started);
   const profile = options.effort ? effortProfiles[options.effort] : undefined;
-  const limits = { ...defaults, ...profile, ...options.budgets };
+  const answerDetail = options.answerDetail ?? "auto";
+  const answerProfile = answerDetailProfiles[answerDetail];
+  const limits = { ...defaults, ...profile,
+    maxWallMs: (profile?.maxWallMs ?? defaults.maxWallMs) + answerProfile.extraFinalMs,
+    finalReserveMs: (profile?.finalReserveMs ?? defaults.finalReserveMs) + answerProfile.extraFinalMs,
+    outputTokens: answerOutputTokens(options.selection), ...options.budgets,
+  };
   if (profile) limits.maxQueries = Math.min(limits.maxQueries, profile.maxQueries);
   const turnId = options.turnId ?? randomUUID();
   const messages = [...options.messages];
@@ -91,28 +99,43 @@ export async function runAgent(options: RunOptions) {
     });
   }
 
-  async function streamStep(model: AgentModel, request: ModelRequest, milliseconds: number): Promise<ModelReply> {
+  async function streamStep(model: AgentModel, request: ModelRequest, milliseconds: number, answerMilliseconds: number): Promise<ModelReply> {
+    const stepStarted = time();
     const stepController = new AbortController();
     const stepSignal = AbortSignal.any([signal, stepController.signal]);
     let stream: ModelStream | undefined;
     let hasText = false;
+    let startAnswer!: () => void;
+    const answerStarted = new Promise<void>(resolve => { startAnswer = resolve; });
     const forward = (delta: string) => {
       if (!hasText && delta) { if (text) append("\n\n"); hasText = true; }
       append(delta);
     };
     try {
-      return await pTimeout((async () => {
+      const work = (async () => {
         stepSignal.throwIfAborted();
         stream = model.stream(request, { signal: stepSignal });
         for await (const event of stream) {
           stepSignal.throwIfAborted();
-          if (!liveLookup && event.type === "content_block_delta" && event.delta.type === "text_delta") forward(event.delta.text);
+          if (event.type === "content_block_delta" && event.delta.type === "text_delta" && event.delta.text) {
+            startAnswer();
+            if (!liveLookup) forward(event.delta.text);
+          }
         }
         const reply = await stream.finalMessage();
         stepSignal.throwIfAborted();
         if (!liveLookup && !hasText) for (const block of reply.content) if (block.type === "text") forward(block.text);
         return reply;
-      })(), { milliseconds, signal });
+      })();
+      // A direct answer can start in a tools-enabled turn. Once text starts,
+      // let it finish within the answer deadline instead of cutting it off at
+      // the research deadline and regenerating the already-streamed answer.
+      const first = await pTimeout(Promise.race([
+        work.then(reply => ({ reply })),
+        answerStarted.then(() => null),
+      ]), { milliseconds, signal });
+      if (first) return first.reply;
+      return await pTimeout(work, { milliseconds: Math.max(1, answerMilliseconds - (time() - stepStarted)), signal });
     } finally {
       stepController.abort();
       stream?.abort();
@@ -138,11 +161,15 @@ export async function runAgent(options: RunOptions) {
       if (options.effort === "instant" && searchId) forceFinal = true;
       if (elapsed() >= limits.maxWallMs - limits.finalReserveMs) { reasons.add("time limit"); forceFinal = true; }
       const last = index === limits.maxSteps - 1;
-      const final = last || forceFinal;
+      // Reserve a synthesis turn and, where the step budget permits, one
+      // correction if the model still asks to search with tools disabled.
+      const researchSteps = Math.max(1, limits.maxSteps - 2);
+      const final = last || index >= researchSteps || forceFinal;
       const remaining = limits.maxWallMs - elapsed() - (final ? 0 : limits.finalReserveMs);
-      const system: TextBlockParam[] = [...options.system];
+      const system: TextBlockParam[] = [...options.system, { type: "text", text: answerDetailInstruction(answerDetail) }];
       if (profile) system.push({ type: "text", text: `Research effort: ${profile.label}. For a research question, aim for ${profile.range} focused search queries and up to ${profile.maxSources} distinct useful sources, batching queries (maximum six per call). The hard query cap is ${profile.maxQueries}. Stop sooner for a simple answer or if sources are unavailable; never pad searches or invent sources to fill a quota. Use more of the budget to resolve genuine gaps and cross-check claims. Research and final synthesis share the same time budget.` });
-      if (final) system.push({ type: "text", text: `Final response; tools are disabled. Answer now using existing evidence or clearly say what could not be verified. Cite the strongest relevant sources. For a score, state the match date/status and update timestamp only if supported; otherwise explain the specific verification gap. Do not announce another search or claim a match is live without a current source timestamp.\n${report()}` });
+      if (!final) system.push({ type: "text", text: `There are at most ${researchSteps - index} search rounds left before final synthesis. Batch related checks into the available rounds. Request needed searches directly. Start answer text when ready to deliver the answer. Then answer from the evidence, distinguishing confirmed details from speculation or details that could not be verified.` });
+      if (final) system.push({ type: "text", text: `Final response; tools are disabled. Preserve the requested answer detail and format. Answer now using existing evidence or clearly say what could not be verified. Cite the strongest relevant sources. For a score, state the match date/status and update timestamp only if supported; otherwise explain the specific verification gap. Do not announce another search or claim a match is live without a current source timestamp.\n${report()}` });
       if (recoveryUsed) system.push({ type: "text", text: `The previous request failed. Give a concise final answer from existing evidence. Never invent a live score or timestamp. Continue without repeating this partial text (earlier text may be omitted):\n${dataBlock("already_shown", text.slice(-160))}` });
       let reply: ModelReply;
       steps++;
@@ -153,7 +180,7 @@ export async function runAgent(options: RunOptions) {
           tools: [webSearchTool], tool_choice: final ? { type: "none" }
             : index === 0 && requireSearch ? { type: "tool", name: "web_search", disable_parallel_tool_use: true }
               : { type: "auto", disable_parallel_tool_use: true },
-        }, Math.max(1, remaining));
+        }, Math.max(1, remaining), Math.max(1, limits.maxWallMs - elapsed()));
       } catch (error) {
         if (error instanceof TimeoutError && !final && !signal.aborted) {
           reasons.add("time limit"); forceFinal = true; continue;
@@ -193,6 +220,7 @@ export async function runAgent(options: RunOptions) {
         if (reply.stop_reason === "max_tokens" || reply.stop_reason === "model_context_window_exceeded") {
           reasons.add("output limit"); emit("error", { message: "The answer reached its output limit." });
         }
+        if (recoveryUsed && answerCompleted) append("\n\nA provider interruption limited this response to a short recovery answer.");
         break;
       }
       if (liveLookup && !final) for (const block of reply.content) if (block.type === "text" && block.text) append(`${text ? "\n\n" : ""}${block.text}`);
@@ -204,7 +232,7 @@ export async function runAgent(options: RunOptions) {
         if (!last && !finalRepairUsed) {
           finalRepairUsed = true;
           forceFinal = true;
-          messages.push({ role: "assistant", content: reply.content }, { role: "user", content: calls.map(call => errorResult(call.id, "No further searches can run. Give a concise answer from existing evidence, or explain what could not be verified and cite the available sources.")) });
+          messages.push({ role: "assistant", content: reply.content }, { role: "user", content: calls.map(call => errorResult(call.id, "No further searches can run. Preserve the requested answer detail and format. Give an answer from existing evidence, or explain what could not be verified and cite the available sources.")) });
           continue;
         }
         if (last) reasons.add("step limit");
@@ -242,10 +270,12 @@ export async function runAgent(options: RunOptions) {
         const searchController = new AbortController();
         const searchSignal = AbortSignal.any([signal, searchController.signal]);
         let count = 0;
+        let usage: AgentEvents["status"]["usage"];
         try {
           const found = await pTimeout(search({ ...parsed.data, queries }, { signal: searchSignal, ...(liveLookup ? { fresh: true } : {}) }), {
             milliseconds: Math.max(1, limits.maxWallMs - limits.finalReserveMs - elapsed()), signal,
           });
+          usage = found.usage;
           signal.throwIfAborted();
           if (found.error) {
             if (found.error.code === "output_budget") reasons.add("search output limit");
@@ -279,7 +309,7 @@ export async function runAgent(options: RunOptions) {
           results.push(errorResult(call.id, "Search failed or timed out. These queries remain unverified."));
         } finally {
           searchController.abort();
-          emit("status", { id, kind: "search", queries, state: "done", count });
+          emit("status", { id, kind: "search", queries, state: "done", count, ...(usage ? { usage } : {}) });
         }
         emit("sources", [...sources.values()]);
       }

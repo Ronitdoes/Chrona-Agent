@@ -10,6 +10,7 @@ import { greeting } from "../lib/workspace";
 import type { ModelCatalog, ModelSelection } from "../lib/model-selection";
 import { ModelPicker } from "./model-picker";
 import { EffortPicker } from "./effort-picker";
+import type { AnswerDetail } from "../lib/answer-detail";
 import type { ResearchEffort } from "../lib/research-effort";
 import { useSmoothScroll } from "./smooth-scrolling";
 import { ConversationSkeleton, ModelPickerSkeleton } from "./loading-skeleton";
@@ -18,11 +19,13 @@ type ActiveRequest = { id: string; controller: AbortController; flush: () => voi
 
 export function Chat({ request = requestChat, localSources = false, initialMessages = [], sessionId, selection, catalog, onSelectionChange,
   clock, disabled = false, notice, onBusyChange, onSent, onComplete, effort = "medium", onEffortChange,
-  loading = false, loadingLabel, modelsLoading = false }: {
+  loading = false, loadingLabel, modelsLoading = false, searchProvider, searchKeys, onSearchProviderChange, onSession, answerDetail = "auto", onAnswerDetailChange }: {
+  searchProvider?: "tavily" | "exa"; searchKeys?: Record<string, boolean>; onSearchProviderChange?: (provider: "tavily" | "exa") => void; onSession?: (id: string) => void;
   request?: typeof requestChat; localSources?: boolean; initialMessages?: ChatMessage[]; sessionId?: string;
   selection?: ModelSelection; catalog?: ModelCatalog; onSelectionChange?: (selection: ModelSelection) => void;
   clock?: { iso: string; tz: string }; disabled?: boolean; notice?: string;
   onBusyChange?: (busy: boolean) => void; onSent?: (text: string) => void; onComplete?: () => void;
+  answerDetail?: AnswerDetail; onAnswerDetailChange?: (detail: AnswerDetail) => void;
   effort?: ResearchEffort; onEffortChange?: (effort: ResearchEffort) => void;
   loading?: boolean; loadingLabel?: string; modelsLoading?: boolean;
 }) {
@@ -100,7 +103,7 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
       }
     };
     try {
-      await request(text, { signal: controller.signal, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, onEvent, sessionId, selection, effort });
+      await request(text, { signal: controller.signal, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, onEvent, sessionId, selection, effort, answerDetail, searchProvider, onSession });
       flush();
       if (active.current?.id === id) dispatch({ type: "finish", assistantId: id, outcome: "complete" });
     } catch (error) {
@@ -150,7 +153,7 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
       {notice ? <p role="status" className="mt-2 text-xs leading-relaxed text-muted">{notice}</p> : null}
       <Composer value={draft} onChange={setDraft} busy={busy} disabled={disabled} onSend={() => { void send(); }} onStop={stop}
         modelControls={onEffortChange || modelsLoading || (catalog && selection && onSelectionChange) ? <>
-          {onEffortChange ? <EffortPicker value={effort} onChange={onEffortChange} disabled={busy || modelsLoading} /> : null}
+          {onEffortChange ? <EffortPicker searchProvider={searchProvider} searchKeys={searchKeys} onSearchProviderChange={onSearchProviderChange} answerDetail={answerDetail} onAnswerDetailChange={onAnswerDetailChange} value={effort} onChange={onEffortChange} disabled={busy || modelsLoading} /> : null}
           {modelsLoading ? <ModelPickerSkeleton /> : catalog && selection && onSelectionChange ? <ModelPicker catalog={catalog} value={selection} onChange={onSelectionChange} disabled={busy} /> : null}
         </> : undefined} />
       <span role="status" className="sr-only">{busy ? "Chrona is responding. Use Stop response to cancel." : ""}</span>

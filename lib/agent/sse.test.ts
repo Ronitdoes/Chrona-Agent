@@ -1,3 +1,4 @@
+import { textChunks } from "./events";
 import { describe, expect, it, vi } from "vitest";
 import { dataFrames } from "./sse";
 
@@ -34,4 +35,14 @@ describe("provider SSE data frames", () => {
     await expect(Array.fromAsync(dataFrames(stream))).rejects.toThrow("exceeded its limit");
     expect(stream.locked).toBe(false);
   });
+});
+
+
+it("chunks large answer deltas while preserving Unicode characters", () => {
+  const text = `${"x".repeat(4095)}🙂${"\"\n".repeat(100_000)}`;
+  const chunks = [...textChunks(text)];
+  expect(chunks.join("")).toBe(text);
+  expect(chunks.every(chunk => chunk.length <= 4097)).toBe(true);
+  const encoder = new TextEncoder(); const decoder = new TextDecoder();
+  expect(chunks.map(chunk => decoder.decode(encoder.encode(chunk))).join("")).toBe(text);
 });

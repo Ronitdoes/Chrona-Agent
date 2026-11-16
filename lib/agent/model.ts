@@ -1,3 +1,4 @@
+import { providerConfig } from "../account-context";
 import Anthropic from "@anthropic-ai/sdk";
 import { createGeminiModel } from "./gemini";
 import { resolveModelSelection } from "../model-config";
@@ -27,7 +28,7 @@ export function createAnthropicModel(apiKey: string, options: { fetch?: typeof g
 }
 
 export async function createConfiguredModel(requested?: ModelSelection): Promise<AgentModel> {
-  const { env } = await import("../env");
+  const env = await providerConfig();
   const selection = await resolveModelSelection(requested, env);
   return selection.provider === "gemini" ? createGeminiModel(env.GEMINI_API_KEY, selection.model)
     : createAnthropicModel(env.ANTHROPIC_API_KEY, { model: selection.model });

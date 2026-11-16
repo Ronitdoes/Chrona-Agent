@@ -37,7 +37,7 @@ describe("store on Postgres", () => {
     await migrate(store.db);
 
     const applied = await store.db.execute<{ version: number }>(sql`SELECT version FROM web_agent_migrations`);
-    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
     expect(await store.turnsInRange("alice", instant, dateFrom("2026-11-16T00:00:00Z"))).toEqual([saved]);
   });
 
@@ -52,7 +52,7 @@ describe("store on Postgres", () => {
     const original = await save("alice", "Check Neon pricing");
     // Reproduce the existing version-2 schema in this isolated test database.
     await store.db.execute(sql`DROP TABLE recall_references`);
-    await store.db.execute(sql`DELETE FROM web_agent_migrations WHERE version >= 3`);
+    await store.db.execute(sql`DELETE FROM web_agent_migrations WHERE version >= 3 AND version <= 5`);
     await migrate(store.db);
     await migrate(store.db);
     expect(await store.historySources("alice", [original.id], { ts: dateFrom(instant.getTime() + 1), id: 999 })).toEqual([original]);

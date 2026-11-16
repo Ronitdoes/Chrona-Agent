@@ -67,7 +67,7 @@ describe("transactional database transfer", () => {
   it.each([1, 2, 3, 4])("imports version %i into the current schema with new defaults", async version => {
     store = await createTestStore();
     await importSnapshot(store.db, snapshot(version));
-    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
     if (version === 3) expect((await store.db.execute(sql`SELECT history_only FROM recall_references`)).rows[0]).toEqual({ history_only: true });
   });
 

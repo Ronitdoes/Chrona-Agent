@@ -12,6 +12,7 @@ import { fitBudget, normalizeResults, officialDomainsFor, wrapResults, type Quer
 
 type Options = {
   primary: SearchProvider;
+  onProvider?: (provider: SearchProvider, query: string, fallback: boolean) => void;
   fallback?: SearchProvider;
   clock?: () => Clock;
   concurrency?: number;
@@ -20,7 +21,7 @@ type Options = {
   officialDomains?: (query: string) => string[];
 };
 
-export type WebSearchResult = SearchPayload & { is_error: boolean; content: string };
+export type WebSearchResult = SearchPayload & { usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[]; is_error: boolean; content: string };
 
 export function cacheTtl(input: Pick<WebSearchInput, "topic" | "recency">): number {
   if (input.topic === "news" || input.recency === "day") return 60_000;
@@ -34,7 +35,7 @@ export function createWebSearch(options: Options) {
   const maxTokens = options.maxTokens ?? 8000;
   if (!(timeoutMs > 0 && Number.isFinite(timeoutMs))) throw new Error("Search timeout must be positive and finite");
   if (!Number.isInteger(maxTokens) || maxTokens < 512) throw new Error("Search token budget must be at least 512");
-  const cache = new LRUCache<string, SearchResult[]>({
+  const cache = new LRUCache<string, { results: SearchResult[]; provider: SearchProvider; fallback: boolean }>({
     max: 200, ttlResolution: 0, perf: { now: () => clock().instant.getTime() },
   });
 
@@ -63,16 +64,20 @@ export function createWebSearch(options: Options) {
     const request = { ...filters, query, instant, officialDomains, ...(fresh ? { fresh: true } : {}) };
     const key = JSON.stringify([query, filters, instant.toISOString().slice(0, 10), officialDomains]);
     const cached = fresh ? undefined : cache.get(key);
-    if (cached) return { query, results: cached };
+    if (cached) {
+      options.onProvider?.(cached.provider, query, cached.fallback);
+      return { query, results: cached.results };
+    }
     for (const provider of [options.primary, options.fallback]) {
       if (!provider) continue;
       try {
         const raw = await callProvider(provider, request, signal);
+        options.onProvider?.(provider, query, provider !== options.primary);
         if (signal?.aborted) break;
         const results = normalizeResults(fresh ? liveScoreEvidence(raw) : raw, officialDomains, input.prefer_official, filters.depth === "deep", fresh);
         if (fresh && !results.length && provider === options.primary && options.fallback) continue;
         if (fresh) for (const result of results) result.retrieved_at = clock().iso;
-        else cache.set(key, results, { ttl: cacheTtl(input) });
+        else cache.set(key, { results, provider, fallback: provider !== options.primary }, { ttl: cacheTtl(input) });
         return { query, results };
       } catch {
         if (signal?.aborted) break;
@@ -110,6 +115,26 @@ export function createWebSearch(options: Options) {
 let configured: ReturnType<typeof createWebSearch> | undefined;
 
 export async function webSearch(input: unknown, options?: { signal?: AbortSignal; fresh?: boolean }): Promise<WebSearchResult> {
+  const { accountContext } = await import("../account-context");
+  const account = accountContext.getStore();
+  if (account) {
+    if (!account.search) {
+      const { config, searchProvider } = account;
+      const primary = searchProvider === "tavily" ? createTavilyProvider(config.TAVILY_API_KEY) : createExaProvider(config.EXA_API_KEY);
+      const other = searchProvider === "tavily" ? "exa" : "tavily";
+      const fallback = other === "exa" ? config.EXA_API_KEY && createExaProvider(config.EXA_API_KEY) : config.TAVILY_API_KEY && createTavilyProvider(config.TAVILY_API_KEY);
+      let usage: NonNullable<WebSearchResult["usage"]> = [];
+      const search = createWebSearch({ primary, fallback: fallback || undefined,
+        onProvider: (provider, query, usedFallback) => usage.push({ query, provider: provider === primary ? searchProvider : other, fallback: usedFallback }),
+      });
+      account.search = async (raw, searchOptions) => {
+        usage = [];
+        const result = await search(raw, searchOptions);
+        return { ...result, usage: [...usage] };
+      };
+    }
+    return account.search(input, options);
+  }
   if (!configured) {
     const { env } = await import("../env");
     configured = createWebSearch({

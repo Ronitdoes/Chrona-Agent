@@ -56,7 +56,7 @@ describe("post-search answer recovery", () => {
     expect(events).not.toContain("error");
     const body = JSON.parse(fetch.mock.calls[3][1]?.body as string);
     expect(body.tools).toBeUndefined();
-    expect(body.toolConfig).toBeUndefined();
+    expect(body.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
     expect(body.contents.at(-1).parts[0].text).toContain("100/2");
   });
   it.each(["unavailable", "stream"])("recovers once from %s using the existing evidence", async (kind) => {
@@ -74,8 +74,9 @@ describe("post-search answer recovery", () => {
     expect(app.events.filter(({ event }) => event === "done")).toHaveLength(1);
     const body = JSON.parse(app.fetch.mock.calls[2][1]?.body as string);
     expect(body).toMatchObject({ generationConfig: { maxOutputTokens: 512 } });
+    expect(result.text).toContain("short recovery answer");
     expect(body.tools).toBeUndefined();
-    expect(body.toolConfig).toBeUndefined();
+    expect(body.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
     expect(body.contents.at(-1).parts[0].text).toContain("100/2");
     expect(JSON.stringify(body.systemInstruction)).toContain("already_shown");
     expect(JSON.stringify(body.systemInstruction)).toContain("Never invent a live score");

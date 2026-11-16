@@ -8,7 +8,7 @@ const positiveInteger = z.string().regex(/^[1-9]\d*$/);
 const sequenceState = z.object({ lastValue: positiveInteger, isCalled: z.boolean() }).strict();
 const snapshotSchema = z.object({
   format: z.literal(1),
-  versions: z.array(z.number().int().min(1).max(5)).min(1).refine(versions => versions.every((version, i) => version === i + 1)),
+  versions: z.array(z.number().int().min(1).max(6)).min(1).refine(versions => versions.every((version, i) => version === i + 1)),
   tables: z.partialRecord(z.enum(tables), z.object({
     columns: z.array(z.object({ name: z.string(), type: z.string() }).strict()).min(1),
     rows: z.array(z.array(z.string().nullable())),

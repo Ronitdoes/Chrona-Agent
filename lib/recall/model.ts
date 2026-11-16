@@ -1,3 +1,4 @@
+import { providerConfig } from "../account-context";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
@@ -76,6 +77,6 @@ export function createRecallModel(selection: ModelSelection, apiKey: string, opt
 }
 
 export async function configuredRecallModel(selection: ModelSelection): Promise<RecallModel> {
-  const { env } = await import("../env");
+  const env = await providerConfig();
   return createRecallModel(selection, selection.provider === "gemini" ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY);
 }

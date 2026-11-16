@@ -1,3 +1,4 @@
+import { accountContext } from "./account-context";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -15,6 +16,8 @@ function readCookie(request: Request, name: string): string | undefined {
 }
 
 export function getOrCreateSession(request: Request, requestedSessionId?: string, id: () => string = randomUUID): Session {
+  const verified = accountContext.getStore();
+  if (verified) return { userId: verified.userId, sessionId: requestedSessionId ?? verified.sessionId, cookies: [] };
   const priorUser = readCookie(request, "user_id");
   const priorSession = priorUser ? readCookie(request, "session_id") : undefined;
   const userId = priorUser ?? id();

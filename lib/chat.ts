@@ -1,7 +1,8 @@
+import { answerDetailSchema } from "./answer-detail";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { runAgent } from "./agent/loop";
-import { sse, type AgentEvents, type SendEvent } from "./agent/events";
+import { sse, textChunks, type AgentEvents, type SendEvent } from "./agent/events";
 import { assemble, dataBlock } from "./agent/prompt";
 import type { ModelFailure } from "./agent/errors";
 import { now, monotonicMs, dateFrom } from "./clock";
@@ -29,6 +30,8 @@ const inputSchema = z.strictObject({
   message: z.string().trim().min(1).max(20_000), sessionId: z.uuid().optional(), tz: timeZone.optional(),
   selection: modelSelectionSchema.optional(),
   effort: effortSchema.default("medium"),
+  answerDetail: answerDetailSchema.default("auto"),
+  searchProvider: z.enum(["tavily", "exa"]).optional(),
 });
 type ChatStore = RecallStore & HistoryStore & Pick<Store, "saveTurn" | "historyFor" | "userMessagesFor"> & CuratorStore;
 type Trace = { info(data: Record<string, unknown>, message: string): void; error(data: Record<string, unknown>, message: string): void };
@@ -131,6 +134,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             modelFailures,
             provider: selection.provider, model: selection.model,
             effort: input.effort,
+            answerDetail: input.answerDetail,
             answerMode, recall: recallTrace,
           }, "chat_turn");
         }
@@ -172,7 +176,11 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             data = { turnId, ttftMs: ttftMs ?? 0, totalMs } as AgentEvents[typeof event];
           }
           if (closed) return;
-          try { controller.enqueue(encoder.encode(sse(event, data))); }
+          try {
+            if (event === "delta") {
+              for (const text of textChunks((data as AgentEvents["delta"]).text)) controller.enqueue(encoder.encode(sse("delta", { text })));
+            } else controller.enqueue(encoder.encode(sse(event, data)));
+          }
           catch { closed = true; abort.abort(); throw new Error("Stream disconnected"); }
         };
         const work = async () => {
@@ -240,7 +248,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
                   ranges: request.ranges.map(range => ({ startUtc: range.startUtc.toISOString(), endUtc: range.endUtc.toISOString(), label: range.label })),
                   collectionSourceIds: response.sourceTurnIds, truncated: response.truncated };
                 abort.signal.throwIfAborted();
-                for (let index = 0; index < response.text.length; index += 4096) send("delta", { text: response.text.slice(index, index + 4096) });
+                send("delta", { text: response.text });
                 return;
               }
               const history = await answerHistory({ userId: session.userId, sessionId: session.sessionId, message: input.message, before, clock: calendar, plan, model: planner, signal: recallSignal }, store);
@@ -269,9 +277,9 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
                 });
                 prompt.system.push({ type: "text", text: dataBlock("historical_baselines", baselines) });
               }
-              const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started));
+              const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started), input.answerDetail);
               if (!budgets) { send("delta", { text: `${historyText}\n\nThe time budget was used checking history; the current external facts remain unverified.` }); return; }
-              const result = await deps.run({ ...prompt, send: (event, data) => { if (event !== "delta" && event !== "done") send(event, data); }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, budgets });
+              const result = await deps.run({ ...prompt, send: (event, data) => { if (event !== "delta" && event !== "done") send(event, data); }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
               searchCount = result.searchCount; evidence = result.evidence; modelFailures = result.modelFailures;
               abort.signal.throwIfAborted();
               send("delta", { text: `${historyText}\n\n${result.text}` });
@@ -286,9 +294,9 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             while (context[0]?.role === "assistant") context.shift();
             if (sessionContext.truncated) prompt.system.push({ type: "text", text: "Some older current-session turns were omitted by the context budget. Do not invent their contents." });
             prompt.messages.unshift(...context.map((turn) => ({ role: turn.role, content: turn.content })));
-            const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started));
+            const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started), input.answerDetail);
             if (!budgets) { skipCuration = true; send("delta", { text: "The time budget was used preparing context. I couldn't verify an answer; please retry." }); return; }
-            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, budgets });
+            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
             searchCount = result.searchCount;
             evidence = result.evidence;
             modelFailures = result.modelFailures;

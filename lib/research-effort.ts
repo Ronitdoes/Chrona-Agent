@@ -1,3 +1,4 @@
+import { answerDetailProfiles, type AnswerDetail } from "./answer-detail";
 import { z } from "zod";
 import type { QueryResult } from "./tools/results";
 
@@ -5,17 +6,18 @@ export const effortSchema = z.enum(["instant", "medium", "high"]);
 export type ResearchEffort = z.infer<typeof effortSchema>;
 
 export const effortProfiles = {
-  instant: { label: "Instant", range: "1–2", maxQueries: 2, maxSources: 2, maxSteps: 3, maxWallMs: 30_000, finalReserveMs: 8000, resultTokens: 4000, outputTokens: 1024, thinking: "low" },
-  medium: { label: "Medium", range: "4–5", maxQueries: 5, maxSources: 5, maxSteps: 4, maxWallMs: 45_000, finalReserveMs: 10_000, resultTokens: 8000, outputTokens: 2048, thinking: "medium" },
-  high: { label: "High", range: "9–10", maxQueries: 10, maxSources: 10, maxSteps: 4, maxWallMs: 90_000, finalReserveMs: 15_000, resultTokens: 16_000, outputTokens: 4096, thinking: "high" },
+  instant: { label: "Instant", range: "1–2", maxQueries: 2, maxSources: 2, maxSteps: 3, maxWallMs: 30_000, finalReserveMs: 8000, resultTokens: 4000, thinking: "low" },
+  medium: { label: "Medium", range: "4–5", maxQueries: 5, maxSources: 5, maxSteps: 4, maxWallMs: 45_000, finalReserveMs: 10_000, resultTokens: 8000, thinking: "medium" },
+  high: { label: "High", range: "9–10", maxQueries: 10, maxSources: 10, maxSteps: 4, maxWallMs: 90_000, finalReserveMs: 15_000, resultTokens: 16_000, thinking: "high" },
 } as const;
 
 /** Interpretation, retrieval and synthesis share the user's chosen time budget. */
-export function researchBudgetAfterRecall(effort: ResearchEffort, elapsedMs: number): { maxWallMs: number; finalReserveMs: number } | null {
+export function researchBudgetAfterRecall(effort: ResearchEffort, elapsedMs: number, answerDetail?: AnswerDetail): { maxWallMs: number; finalReserveMs: number } | null {
   if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new Error("Invalid elapsed time");
   const profile = effortProfiles[effort];
-  const maxWallMs = profile.maxWallMs - elapsedMs;
-  return maxWallMs <= 1000 ? null : { maxWallMs, finalReserveMs: Math.min(profile.finalReserveMs, maxWallMs) };
+  const extraFinalMs = answerDetail ? answerDetailProfiles[answerDetail].extraFinalMs : 0;
+  const maxWallMs = profile.maxWallMs + extraFinalMs - elapsedMs;
+  return maxWallMs <= 1000 ? null : { maxWallMs, finalReserveMs: Math.min(profile.finalReserveMs + extraFinalMs, maxWallMs) };
 }
 
 /** Node's AbortSignal.timeout requires integer milliseconds, while the injected

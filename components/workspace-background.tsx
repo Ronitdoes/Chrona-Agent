@@ -1,14 +1,13 @@
 "use client";
 
-import { memo, useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { asciiBackgroundRows } from "../lib/ascii-background";
 import "./workspace-background.css";
-
-const frames = Array.from({ length: 16 }, (_, frame) => asciiBackgroundRows(frame));
 
 export const WorkspaceBackground = memo(function WorkspaceBackground() {
   const background = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState(0);
+  const rows = useMemo(() => asciiBackgroundRows(frame), [frame]);
   const textureId = useId();
 
   useEffect(() => {
@@ -32,7 +31,7 @@ export const WorkspaceBackground = memo(function WorkspaceBackground() {
       timer = undefined;
       resetPointer();
       if (!reducedMotion.matches && !document.hidden) {
-        timer = setInterval(() => setFrame(current => (current + 1) % frames.length), 240);
+        timer = setInterval(() => setFrame(current => current + 1), 100);
       }
     }
     function movePointer(event: PointerEvent) {
@@ -72,9 +71,7 @@ export const WorkspaceBackground = memo(function WorkspaceBackground() {
     <div className="workspace-ascii-plane">
       <svg className="workspace-ascii-texture" viewBox="0 0 1440 1000" preserveAspectRatio="xMidYMid slice" focusable="false">
         <g id={textureId}>
-          {[0, 1, 2].map(layer => <g key={layer} className="workspace-ascii-shimmer" style={{ animationDelay: `${layer * -4}s` }}>
-            {frames[frame].map((text, row) => row % 3 === layer ? <text key={row} x="0" y={row * 8 + 7} xmlSpace="preserve" textLength="1440" lengthAdjust="spacingAndGlyphs">{text}</text> : null)}
-          </g>)}
+          {rows.map((text, row) => <text key={row} x="0" y={row * 8 + 7} xmlSpace="preserve" textLength="1440" lengthAdjust="spacingAndGlyphs">{text}</text>)}
         </g>
       </svg>
       <div className="workspace-ascii-focus">

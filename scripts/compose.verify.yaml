@@ -22,6 +22,9 @@ services:
       database:
         condition: service_healthy
     environment:
+      BETTER_AUTH_URL: http://127.0.0.1:3000
+      BETTER_AUTH_SECRET: synthetic-verification-auth-secret-32-characters
+      API_KEY_ENCRYPTION_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
       MODEL_PROVIDER: gemini
       GEMINI_API_KEY: synthetic-no-provider-requests
       TAVILY_API_KEY: synthetic-no-search-requests

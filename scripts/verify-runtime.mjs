@@ -7,9 +7,8 @@ import { monotonicMs } from "../lib/clock.ts";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const base = "http://127.0.0.1:3000";
-const user = randomUUID();
-const session = randomUUID();
-const headers = { cookie: `user_id=${user}; session_id=${session}` };
+let session;
+let headers = { origin: base, "Content-Type": "application/json" };
 async function run(args) {
   const child = spawn("npm", args, { stdio: "inherit", shell: false });
   const [code] = await once(child, "exit");
@@ -20,7 +19,7 @@ async function start(command) {
   const started = monotonicMs();
   while (monotonicMs() - started < 60_000) {
     if (child.exitCode !== null) throw new Error(`${command} exited before becoming ready`);
-    try { if ((await fetch(`${base}/api/models`)).ok) return child; } catch { /* Wait for server startup. */ }
+    try { if ([200, 401].includes((await fetch(`${base}/api/models`)).status)) return child; } catch { /* Wait for server startup. */ }
     await pause(250);
   }
   process.kill(-child.pid, "SIGTERM");
@@ -46,9 +45,20 @@ try {
   // This fixed DB name lives only in the disposable verification container.
   await admin.query("CREATE DATABASE chrona_shipping");
   server = await start("dev");
-  assert.equal((await fetch(base)).status, 200);
+  const signup = await fetch(`${base}/api/auth/sign-up/email`, { method: "POST", headers,
+    body: JSON.stringify({ email: `verify-${randomUUID()}@example.test`, name: "Verification", password: "synthetic-verification-password" }) });
+  assert.equal(signup.status, 200);
+  headers.cookie = signup.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+  for (const provider of ["gemini", "tavily"]) {
+    const saved = await fetch(`${base}/api/credentials`, { method: "PUT", headers, body: JSON.stringify({ provider, key: "synthetic-verification-key" }) });
+    assert.equal(saved.status, 200);
+  }
+  const created = await fetch(`${base}/api/conversations`, { method: "POST", headers });
+  assert.equal(created.status, 201);
+  session = (await created.json()).id;
+  assert.equal((await fetch(base, { headers })).status, 200);
   const response = await fetch(`${base}/api/chat`, { method: "POST", headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ message: "What are all the questions I asked you today?", tz: "UTC", sessionId: session }) });
+    body: JSON.stringify({ message: "What are all the questions I asked you today?", tz: "UTC", sessionId: session, searchProvider: "tavily" }) });
   assert.equal(response.status, 200);
   const stream = await response.text();
   assert.ok(stream.includes("event: done") && !stream.includes("event: error"));

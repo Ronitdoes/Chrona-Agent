@@ -81,6 +81,19 @@ const migrations = [{
 }, {
   version: 5,
   statements: [`ALTER TABLE recall_references ADD COLUMN collection jsonb`],
+}, {
+  version: 6,
+  statements: [
+    `CREATE TABLE "user" (id text PRIMARY KEY, name text NOT NULL, email text NOT NULL UNIQUE, email_verified boolean NOT NULL DEFAULT false, image text, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+    `CREATE TABLE "session" (id text PRIMARY KEY, expires_at timestamptz NOT NULL, token text NOT NULL UNIQUE, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, ip_address text, user_agent text, user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE)`,
+    `CREATE INDEX auth_session_user ON "session"(user_id)`,
+    `CREATE TABLE account (id text PRIMARY KEY, account_id text NOT NULL, provider_id text NOT NULL, user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE, access_token text, refresh_token text, id_token text, access_token_expires_at timestamptz, refresh_token_expires_at timestamptz, scope text, password text, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+    `CREATE INDEX auth_account_user ON account(user_id)`,
+    `CREATE TABLE verification (id text PRIMARY KEY, identifier text NOT NULL, value text NOT NULL, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+    `CREATE TABLE provider_credentials (user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE, provider text NOT NULL CHECK (provider IN ('anthropic','gemini','tavily','exa')), encrypted text NOT NULL, PRIMARY KEY(user_id, provider))`,
+    `CREATE TABLE conversations (id text PRIMARY KEY, user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE)`,
+    `CREATE INDEX conversations_user ON conversations(user_id)`,
+  ],
 }];
 
 export async function migrate(db: StoreDatabase): Promise<void> {

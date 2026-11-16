@@ -13,11 +13,10 @@ Use Node.js and Docker Desktop with the Linux engine running. Node 24 is the
 configuration used by the clean-install verifier. Next.js runs on the host;
 Postgres runs in Docker.
 
-Copy `.env.example` to `.env.local`. Configure `TAVILY_API_KEY` and one answer
-provider:
-
-- Anthropic: `MODEL_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`.
-- Google AI Studio: `MODEL_PROVIDER=gemini` and `GEMINI_API_KEY`.
+Copy `.env.example` to `.env.local`. Set `BETTER_AUTH_URL` to your app origin.
+Generate independent secrets for `BETTER_AUTH_SECRET` and `API_KEY_ENCRYPTION_KEY`
+using the commands in the example file. The encryption key must contain 64 hex
+characters. Preserve it across restarts and database restores.
 
 Keep the example `DATABASE_URL` for the local database, then run:
 
@@ -27,10 +26,11 @@ npm run db:up
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000). Migrations run automatically before
+Open [localhost:3000](http://localhost:3000), create an email/password account,
+and connect one LLM key and one search key in API keys settings. Migrations run automatically before
 the server handles requests. Missing or invalid database configuration fails
 startup; there is no embedded database fallback. Restart the server after
-changing provider keys or environment settings. `.env.local` takes precedence
+changing environment settings. Personal provider key changes apply on the next request. `.env.local` takes precedence
 over `.env`; avoid conflicting values. Never commit either private file.
 
 For a production server on the host, keep Postgres running and use:
@@ -45,6 +45,11 @@ include a production application Docker image or hosting deployment automation.
 
 ## What the app supports
 
+- Email/password signup, sign-in and sign-out with account-owned history and
+  encrypted personal Anthropic, Gemini, Tavily and Exa keys.
+- Private `/chat/[sessionId]` links with refresh and browser navigation.
+- Tavily/Exa selection in the effort popup, with automatic fallback to the other
+  configured provider and query-level fallback status.
 - General research with source cards, search progress, streaming answers and
   bounded recovery after provider failures.
 - Conversation inventories rendered directly from user-message records, without
@@ -65,14 +70,32 @@ include a production application Docker image or hosting deployment automation.
 
 Research effort is remembered in the browser and can also be supplied by API:
 
-| Effort | Search queries | Sources | Answer-model calls | Request budget |
+| Effort | Search queries | Sources | Answer-model calls | Research and context budget |
 |---|---:|---:|---:|---:|
 | Instant | 2 | 2 | 3 | 30 seconds |
 | Medium (default) | 5 | 5 | 4 | 45 seconds |
 | High | 10 | 10 | 4 | 90 seconds |
 
+The effort popup also provides **Answer detail** with Auto (default), Brief and
+Detailed. The preference is saved in the browser separately for each account.
+Auto follows the question, Brief favors compact answers, and Detailed develops
+explanations with relevant background, examples and citations. Explicit prompt
+instructions about length, word count or format take precedence.
+
+Answer generation receives additional time independently of the search limits.
+Brief adds up to 30 seconds, Auto adds up to 120 seconds, and Detailed adds up to
+240 seconds to the final-answer reserve and total request deadline. These are
+maximum allowances. An ordinary short response returns as soon as it completes.
+The Node chat route permits up to 360 seconds. Hosting must support that duration.
+
+`gemini-3.5-flash-lite` requests use its documented 65,536-token output ceiling.
+Other model IDs use a conservative 8,192-token allowance. Prompt instructions
+control actual answer length within this ceiling. Long output is streamed in
+Unicode-safe chunks, and token/time exhaustion is reported with partial text
+preserved. A provider-failure recovery remains a bounded short response.
+
 These are limits, not promised source counts. Planning and recall share the
-request's time budget; their inference calls are separate from answer-model
+research/context time budget; their inference calls are separate from answer-model
 calls. A single search batch can contain several queries. Live-score lookups
 bypass the search cache, request fresh page content and allow at most two search
 passes. Dates use the requested timezone, and ambiguous numeric dates require
@@ -110,12 +133,15 @@ application configuration with Zod.
 | Variable | Purpose |
 |---|---|
 | `MODEL_PROVIDER` | Default provider: `anthropic` or `gemini` |
-| `ANTHROPIC_API_KEY` | Required for the Anthropic provider |
+| `ANTHROPIC_API_KEY` | Optional Anthropic CLI/evaluation key |
 | `ANTHROPIC_MODEL` | Anthropic answer model; default `claude-sonnet-5-5` |
-| `GEMINI_API_KEY` | Required for the Gemini provider |
+| `GEMINI_API_KEY` | Optional Gemini CLI/evaluation key |
 | `GEMINI_MODEL` | Gemini answer model; default `gemini-3.5-flash-lite` |
-| `TAVILY_API_KEY` | Required primary web-search provider key |
-| `EXA_API_KEY` | Optional fallback search provider key |
+| `TAVILY_API_KEY` | Optional Tavily CLI/evaluation key |
+| `EXA_API_KEY` | Optional Exa CLI/evaluation key |
+| `BETTER_AUTH_URL` | App origin, default `http://localhost:3000` |
+| `BETTER_AUTH_SECRET` | Required authentication secret, at least 32 characters |
+| `API_KEY_ENCRYPTION_KEY` | Required independent 32-byte hex key |
 | `DATABASE_URL` | Required PostgreSQL URL; use the example for local Docker |
 | `TEST_DATABASE_URL` | Test service URL; the harness defaults to the isolated local service and rejects unsafe overrides |
 | `DEFAULT_TZ` | Timezone fallback; default `Asia/Kolkata` |
@@ -180,12 +206,17 @@ These are bounded regression checks, not a production accuracy benchmark.
 
 | Route | Contract |
 |---|---|
-| `POST /api/chat` | JSON `message`, optional UUID `sessionId`, `tz`, `selection: { provider, model }`, and `effort`; returns SSE |
+| `POST /api/chat` | JSON `message`, required owned UUID `sessionId` and `searchProvider`; optional `tz`, `selection: { provider, model }`, and `effort`; returns SSE |
 | `GET /api/history` | Optional `sessionId`, `tz`, `limit` (1–200) and opaque `before` cursor; returns grouped sessions and `nextCursor` |
 | `DELETE /api/history?sessionId=<UUID>` | Confirmed, user-scoped conversation deletion; successful deletion returns 204 |
-| `GET /api/models` | Model IDs and provider availability; never API keys |
+| `GET /api/models` | Model IDs and account provider availability; never API keys |
+| `POST /api/conversations` | Creates an owned conversation with a server UUID |
+| `GET /api/credentials` | Configured-provider status only |
+| `PUT /api/credentials` | Saves or replaces an encrypted personal provider key |
+| `DELETE /api/credentials?provider=<provider>` | Removes the account’s key for that provider |
+| `/api/auth/*` | Better Auth email/password signup, sign-in, session and sign-out |
 
-Anonymous HttpOnly cookies provide continuity, not account authentication. SSE
+Better Auth database sessions authenticate private pages and APIs. SSE
 events are `status`, `sources`, `delta`, `error` and `done`. `X-Session-Id`
 identifies the conversation; `X-Turn-Id` and `done.turnId` identify the request.
 See [runtime architecture](docs/ARCHITECTURE.md) for persistence and evidence flow.
@@ -201,3 +232,27 @@ fictional; it makes no model/search requests or conversation writes.
 - [Conversation recall](docs/MEMORY_RECALL.md): evidence rules, retrieval bounds and follow-up references.
 - [Historical recall audit](docs/MEMORY_AUDIT.md): pre-remediation findings and current resolution status.
 - [Contributor instructions](AGENTS.md): repository constraints and maintenance rules.
+
+## Account security and operations
+
+Passwords require 12–128 characters. Signup grants immediate access. This release
+provides no email verification or password-reset email delivery. Auth attempts are
+rate-limited in each server process. Deploy behind HTTPS with a stable
+`BETTER_AUTH_URL`; mutation origins must match it. Private API access requires a
+Better Auth session. Legacy anonymous cookies grant no access, and existing
+anonymous records stay in Postgres without being assigned to accounts.
+
+Provider keys are encrypted with AES-256-GCM and bound to their account and
+provider. Settings expose configuration status only. Replacing or removing keys
+affects subsequent requests; already-running requests finish with their captured
+credentials. Removing the last LLM or search key disables sending while history
+remains readable. Back up the encryption key separately from Postgres. Changing
+it requires re-encrypting credentials or asking users to reconnect keys.
+
+Environment provider keys are optional inputs for CLI smoke tests and live
+evaluations. Web requests always use the signed-in account's keys. A failed search
+can charge the other configured search provider when fallback runs.
+
+On hosts where Turbopack cannot spawn its loader process, the equivalent build
+uses the same Tailwind loader through webpack. Run `npx next build --webpack`,
+then `npm start`. Development can use `npm run dev -- --webpack`.

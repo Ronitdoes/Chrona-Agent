@@ -56,8 +56,9 @@ export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCal
   return {
     systemInstruction: { parts: typeof request.system === "string" ? [{ text: request.system }] : request.system?.map(block => ({ text: block.type === "text" ? block.text : "" })) ?? [] },
     contents,
-    ...(!textOnly && declarations?.length ? { tools: [{ functionDeclarations: declarations }], toolConfig: { functionCallingConfig: {
-      mode: choice?.type === "none" ? "NONE" : choice?.type === "tool" || choice?.type === "any" ? "ANY" : "AUTO",
+    ...(!textOnly && declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
+    ...(textOnly || declarations?.length ? { toolConfig: { functionCallingConfig: {
+      mode: textOnly ? "NONE" : choice?.type === "tool" || choice?.type === "any" ? "ANY" : "AUTO",
       ...(choice?.type === "tool" ? { allowedFunctionNames: ["web_search"] } : {}),
     } } } : {}),
     generationConfig: { maxOutputTokens: request.max_tokens,
@@ -73,6 +74,7 @@ export function createGeminiModel(apiKey: string, model = "gemini-3.5-flash-lite
   return { stream(request, { signal }) {
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
+    const maxResponseBytes = Math.min(2_097_152, Math.max(262_144, request.max_tokens * 32));
     let resolve!: (reply: ModelReply) => void;
     let reject!: (error: unknown) => void;
     const final = new Promise<ModelReply>((yes, no) => { resolve = yes; reject = no; });
@@ -107,7 +109,7 @@ export function createGeminiModel(apiKey: string, model = "gemini-3.5-flash-lite
             const candidate = chunk.candidates?.[0];
             for (const part of candidate?.content?.parts ?? []) {
               size += Buffer.byteLength(JSON.stringify(part));
-              if (size > 262_144) throw new Error("Oversized response");
+              if (size > maxResponseBytes) throw new Error("Oversized response");
               parts.push(part);
               if (part.text && !part.thought) {
                 text += part.text;

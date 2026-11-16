@@ -22,6 +22,7 @@ export function SearchStatus({ searches, state }: { searches: AgentEvents["statu
           return (
             <section key={search.id} aria-label={`Search batch ${index + 1}`}>
               <p className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted"><span>Batch {index + 1}</span><span>{status}</span></p>
+              {search.usage?.map(item => <p key={`${item.query}:${item.provider}`} className="mb-2 text-muted">{item.provider === "exa" ? "Exa" : "Tavily"}{item.fallback ? " · fallback" : ""} · {item.query}</p>)}
               <ul className="space-y-2">
                 {search.queries.map((query, index) => <li key={`${index}:${query}`} className="flex items-start gap-2 leading-relaxed wrap-anywhere"><span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted" aria-hidden="true" /><span>{query}</span></li>)}
               </ul>

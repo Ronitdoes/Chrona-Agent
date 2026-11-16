@@ -17,8 +17,7 @@
   fill: currentColor;
   font-family: var(--font-geist-mono), monospace;
   font-size: 7px;
-  opacity: 0.38;
-  animation: workspace-ascii-drift 28s ease-in-out infinite alternate;
+  opacity: 0.28;
 }
 
 .workspace-ascii-plane {
@@ -36,22 +35,9 @@
   transition: opacity 700ms ease-out;
 }
 
-.workspace-ascii-highlight { opacity: 0.3; }
-
-.workspace-ascii-shimmer { animation: workspace-ascii-shimmer 12s ease-in-out infinite; }
-
-@keyframes workspace-ascii-drift {
-  from { transform: translate3d(-5px, -6px, 0) scale(1.025); }
-  to { transform: translate3d(5px, 6px, 0) scale(1.025); }
-}
-
-@keyframes workspace-ascii-shimmer {
-  0%, 100% { opacity: 0.65; }
-  50% { opacity: 1; }
-}
+.workspace-ascii-highlight { opacity: 0.12; }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-ascii-texture, .workspace-ascii-shimmer { animation: none; }
   .workspace-ascii-plane { transform: none; transition: none; }
   .workspace-ascii-focus { display: none; }
 }

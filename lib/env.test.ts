@@ -6,7 +6,8 @@ beforeAll(async () => {
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   vi.stubEnv("MODEL_PROVIDER", "anthropic");
   vi.stubEnv("DATABASE_URL", "postgresql://test@localhost/test");
-  loadEnv = (await import("./env")).loadEnv;
+  const original = (await import("./env")).loadEnv;
+  loadEnv = source => original({ BETTER_AUTH_SECRET: "test-auth-secret-with-at-least-32-characters", API_KEY_ENCRYPTION_KEY: "11".repeat(32), ...source });
 });
 afterAll(() => { vi.unstubAllEnvs(); });
 
@@ -29,16 +30,16 @@ describe("provider configuration", () => {
     const config = loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key", TAVILY_API_KEY: "test-key" });
     expect(config.GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
     expect(config.ANTHROPIC_API_KEY).toBe("");
-    expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", TAVILY_API_KEY: "test-key" })).toThrow("GEMINI_API_KEY");
+    expect(loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", TAVILY_API_KEY: "test-key" }).GEMINI_API_KEY).toBe("");
     expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key", GEMINI_MODEL: "../invalid", TAVILY_API_KEY: "test-key" })).toThrow();
   });
   it("keeps Anthropic as the default and requires its key", () => {
     expect(loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", ANTHROPIC_API_KEY: "test-key", TAVILY_API_KEY: "test-key" }).MODEL_PROVIDER).toBe("anthropic");
-    expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", TAVILY_API_KEY: "test-key" })).toThrow("ANTHROPIC_API_KEY is required");
+    expect(loadEnv({ DATABASE_URL: "postgresql://test@localhost/test" }).ANTHROPIC_API_KEY).toBe("");
   });
   it("rejects unknown providers, missing search keys and blank model names", () => {
     expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "unknown", TAVILY_API_KEY: "test-key" })).toThrow();
-    expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key" })).toThrow("TAVILY_API_KEY");
+    expect(loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key" }).TAVILY_API_KEY).toBe("");
     expect(() => loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key", TAVILY_API_KEY: "test-key", GEMINI_MODEL: " " })).toThrow();
   });
   it("rejects the removed provider at startup", () => {

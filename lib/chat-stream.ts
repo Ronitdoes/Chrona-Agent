@@ -1,3 +1,4 @@
+import type { AnswerDetail } from "./answer-detail";
 import { z } from "zod";
 import type { ModelSelection } from "./model-selection";
 import type { ResearchEffort } from "./research-effort";
@@ -6,7 +7,7 @@ const count = z.number().int().nonnegative();
 export const chatEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), data: z.object({ text: z.string() }) }),
   z.object({ type: z.literal("status"), data: z.object({
-    id: z.string(), kind: z.literal("search"), queries: z.array(z.string()), state: z.enum(["running", "done"]), count,
+    id: z.string(), kind: z.literal("search"), queries: z.array(z.string()), state: z.enum(["running", "done"]), count, usage: z.array(z.object({ query: z.string(), provider: z.enum(["tavily", "exa"]), fallback: z.boolean() })).optional(),
   }) }),
   z.object({ type: z.literal("sources"), data: z.array(z.object({
     url: z.string(), title: z.string(), domain: z.string(), publishedDate: z.string().nullable(), isOfficial: z.boolean(),
@@ -90,12 +91,20 @@ export async function readChatStream(body: ReadableStream<Uint8Array>, onEvent: 
 
 export async function requestChat(message: string, options: {
   tz: string; signal: AbortSignal; onEvent: (event: ChatEvent) => void; fetch?: typeof globalThis.fetch;
-  sessionId?: string; selection?: ModelSelection; effort?: ResearchEffort;
+  sessionId?: string; selection?: ModelSelection; effort?: ResearchEffort; answerDetail?: AnswerDetail; searchProvider?: "tavily" | "exa"; onSession?: (id: string) => void;
 }): Promise<void> {
   options.signal.throwIfAborted();
+  let sessionId = options.sessionId;
+  const fetcher = options.fetch ?? globalThis.fetch;
+  if (!sessionId && options.onSession) {
+    const created = await fetcher("/api/conversations", { method: "POST", credentials: "same-origin", signal: options.signal });
+    if (!created.ok) throw new ChatStreamError("The conversation could not be created.");
+    sessionId = z.object({ id: z.uuid() }).parse(await created.json()).id;
+    options.onSession?.(sessionId);
+  }
   const response = await (options.fetch ?? globalThis.fetch)("/api/chat", {
     method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, tz: options.tz, sessionId: options.sessionId, selection: options.selection, effort: options.effort }), signal: options.signal,
+    body: JSON.stringify({ message, tz: options.tz, sessionId, searchProvider: options.searchProvider, selection: options.selection, effort: options.effort, answerDetail: options.answerDetail }), signal: options.signal,
   });
   if (!response.ok) {
     const fallback = response.status === 429 ? "Please wait a moment before sending another message." : "The message could not be sent. Please try again.";

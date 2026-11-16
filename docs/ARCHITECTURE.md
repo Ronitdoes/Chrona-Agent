@@ -51,8 +51,8 @@ flowchart LR
 
 ## Request lifecycle
 
-The chat handler validates JSON, timezone, model selection, effort and anonymous
-cookie identity before acquiring per-user admission. It creates a request UUID
+The chat handler validates JSON, timezone, model selection, effort, selected search provider and authenticated
+account identity before acquiring per-user admission. It creates a request UUID
 for tracing and begins saving the user message. Inference waits for that write
 to succeed. The response's strict timestamp/ID boundary excludes the new message
 and any future records from recalled history.
@@ -94,9 +94,9 @@ can still be persisted. A completion trace records persistence outcomes.
 
 | Endpoint | Input | Output |
 |---|---|---|
-| `POST /api/chat` | `message` (1–20,000 characters); optional UUID `sessionId`, `tz`, `selection: { provider, model }`, `effort` | SSE; anonymous identity/conversation cookies |
+| `POST /api/chat` | `message` (1–20,000 characters); required owned UUID `sessionId` and `searchProvider`; optional `tz`, `selection: { provider, model }`, `effort` | SSE; verified account session |
 | `GET /api/history` | Optional `sessionId`, `tz`, `limit` (1–200), opaque `before` | `sessions`, `nextCursor`, `activeSessionId`, `now`, `tz` |
-| `DELETE /api/history?sessionId=<UUID>` | Owned conversation UUID | 204 on successful/idempotent deletion; active-response protection and sanitized failures |
+| `DELETE /api/history?sessionId=<UUID>` | Owned conversation UUID | 204 on successful owned deletion; 404 for unavailable IDs; active-response protection and sanitized failures |
 | `GET /api/models` | No secret input | Default selection, configured model IDs and provider availability |
 
 History uses timestamp/ID keyset pagination and groups each returned page into
@@ -182,11 +182,30 @@ target; local cutover backups and exports remain in ignored `data/`.
 
 `web_search` accepts 1–6 queries per tool invocation and optional recency,
 `since`, topic, official-source preference and fast/deep depth. Per-request effort
-can impose a smaller remaining quota. Tavily is primary; Exa is used only when
-configured as fallback. Search handles concurrency, timeouts, deduplication,
+can impose a smaller remaining quota. The account-selected provider is primary; the other saved provider can run
+after failure. Search handles concurrency, timeouts, deduplication,
 bounded content, date normalization and cache expiry internally.
 
-The answer loop caps calls, queries, sources, context and elapsed time. Planning,
+The chat request accepts optional `answerDetail` with `auto` (default), `brief`
+or `detailed`. The workspace saves this preference under an account-specific
+browser key. The prompt makes current-request length and format instructions
+higher priority than the saved preference. Answer generation has its own output
+ceiling and extra final-answer reserve, separate from effort's search quotas.
+The exact Gemini 3.5 Flash-Lite model has a 65,536-token ceiling, and other model
+IDs use 8,192. The provider stream has a bounded allowance for large responses,
+and server SSE splits answer text into Unicode-safe chunks. The chat route
+allows up to 360 seconds. A direct answer beginning in a tools-enabled turn
+uses the answer deadline once text starts, preventing a research deadline from
+cutting off and regenerating already-streamed prose. Structured history/recall evidence contracts retain
+their existing bounds.
+
+The answer loop caps calls, queries, sources, context and elapsed time.
+Within the model-call budget, research leaves room for final synthesis and one
+correction when at least three calls are available. Related checks are batched
+into the remaining research rounds. A late tool request receives a paired denial
+and an evidence-only final-answer instruction, without executing another search.
+Gemini final synthesis omits tool declarations and explicitly sets native
+function-calling mode to `NONE`. Planning,
 recall and synthesis share the request's time budget. Final/recovery calls disable
 additional tools. A bounded recoverable failure may synthesize from existing
 results without repeating search. Native provider errors are categorized and
@@ -226,8 +245,8 @@ persist conversations.
 ## Configuration, traces and validation
 
 `lib/env.ts` validates the configuration listed in [`.env.example`](../.env.example).
-Secrets stay on the server. Anonymous HttpOnly cookies provide continuity, not
-account authentication. Per-process admission allows one active turn per user
+Secrets stay on the server. Better Auth database sessions provide account
+authentication with HttpOnly cookies. Per-process admission allows one active turn per user
 and ten per minute by default; it is not a distributed rate limiter.
 
 Completion traces record request/turn IDs, timing, query count, persistence,
@@ -240,3 +259,22 @@ sources. Paid checks remain separate. `npm run ship:verify` runs a source-only
 working-tree snapshot in fresh Node/Postgres Linux containers, including dev and
 production HTTP persistence checks. Read [README](../README.md) for exact commands
 and [DESIGN](DESIGN.md#evidence-for-the-design) for measured evidence and limits.
+
+## Authenticated accounts and personal providers
+
+Better Auth owns email/password login sessions in Postgres. Every private API and
+page verifies the session. Conversation UUIDs in `/chat/[sessionId]` address
+server-created, account-owned conversations. The URL supplies the conversation,
+while the authenticated session supplies the owner for history, recall, deletion
+and credential operations. Anonymous records remain unassigned and inaccessible.
+
+API keys settings requires one LLM key and one search key before sending. Stored
+credentials use AES-256-GCM with account/provider authenticated data and a fresh
+nonce. Reads return configured-provider status. Request-local AsyncLocalStorage
+carries personal provider configuration through answer generation, recall and
+explicitly rebound deferred curation callbacks. The web path never falls back to
+deployment provider keys. Search caches exist within that request context.
+
+The effort popup selects Tavily or Exa. The selected provider runs first and the
+other saved provider can run once after failure. Search SSE status reports the
+actual provider and fallback per query. The model exposes only `web_search`.

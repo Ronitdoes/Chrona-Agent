@@ -10,6 +10,7 @@ import { collectionContains, collectionSchema, type RecallCollection } from "../
 export type StoreDatabase = NodePgDatabase<typeof schema>;
 export const USER_MEMORY_LOCK = 781424;
 export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionId" | "role" | "content"> & {
+  requireOwnedConversation?: boolean;
   ts?: Date;
   tz?: string;
   curation?: { userTurnId: number; evidence: SearchResult[] };
@@ -38,7 +39,10 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
         // after the conversation and its pending extraction jobs are removed.
         await tx.execute(sql`SELECT pg_advisory_xact_lock(${USER_MEMORY_LOCK}, hashtext(${userId}))`);
         const owned = await tx.select({ id: turns.id }).from(turns).where(and(eq(turns.userId, userId), eq(turns.sessionId, sessionId)));
-        if (!owned.length) return false;
+        if (!owned.length) {
+          await tx.delete(schema.conversations).where(and(eq(schema.conversations.id, sessionId), eq(schema.conversations.userId, userId)));
+          return false;
+        }
         const ids = owned.map(turn => turn.id);
         const linked = await tx.select({ id: claims.id }).from(claims).where(and(eq(claims.userId, userId), inArray(claims.turnId, ids)));
         if (linked.length) await tx.update(claims).set({ supersededBy: null }).where(and(eq(claims.userId, userId), inArray(claims.supersededBy, linked.map(claim => claim.id))));
@@ -47,6 +51,7 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
         await tx.delete(threads).where(and(eq(threads.userId, userId), inArray(threads.sourceTurnId, ids)));
         await tx.delete(curations).where(and(eq(curations.userId, userId), or(inArray(curations.turnId, ids), inArray(curations.userTurnId, ids))));
         await tx.delete(turns).where(and(eq(turns.userId, userId), eq(turns.sessionId, sessionId)));
+        await tx.delete(schema.conversations).where(and(eq(schema.conversations.id, sessionId), eq(schema.conversations.userId, userId)));
         return true;
       });
     },
@@ -78,14 +83,20 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
     async saveTurn(input: SaveTurnInput) {
       scopedUser(input.userId);
       const current = input.ts ? undefined : clock();
-      const { curation, recall, ...fields } = input;
+      const { curation, recall, requireOwnedConversation, ...fields } = input;
       const values = {
         ...fields,
         ts: input.ts ?? current!.instant,
         tz: input.tz ?? current?.tz,
       };
-      if (!curation && !recall) return (await db.insert(turns).values(values).returning())[0];
+      if (!curation && !recall && !requireOwnedConversation) return (await db.insert(turns).values(values).returning())[0];
       return db.transaction(async (tx) => {
+        if (requireOwnedConversation) {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(${USER_MEMORY_LOCK}, hashtext(${input.userId}))`);
+          const owned = await tx.select().from(schema.conversations).where(and(eq(schema.conversations.id, input.sessionId), eq(schema.conversations.userId, input.userId)));
+          if (!owned.length) throw new Error("Conversation unavailable");
+        }
+        if (!curation && !recall) return (await tx.insert(turns).values(values).returning())[0];
         const userTurnId = curation?.userTurnId ?? recall!.userTurnId;
         const [user] = await tx.select().from(turns).where(and(
           eq(turns.id, userTurnId), eq(turns.userId, input.userId),

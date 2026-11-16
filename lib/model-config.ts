@@ -14,7 +14,7 @@ export function modelCatalog(config: Env): ModelCatalog {
 }
 
 export async function resolveModelSelection(requested?: ModelSelection, config?: Env): Promise<ModelSelection> {
-  config ??= (await import("./env")).env;
+  config ??= await (await import("./account-context")).providerConfig();
   const selection = modelSelectionSchema.parse(requested ?? modelCatalog(config).default);
   if (!config[keyNames[selection.provider]]) throw new Error(`Add ${keyNames[selection.provider]} to the server environment to use this provider.`);
   return selection;

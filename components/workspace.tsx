@@ -1,5 +1,9 @@
 "use client";
+import { answerDetailSchema, type AnswerDetail } from "../lib/answer-detail";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
+import { AccountMenu } from "./account-menu";
 import { z } from "zod";
 import { AppShell } from "./app-shell";
 import { Chat } from "./chat";
@@ -17,10 +21,14 @@ const subscribeOnline = (callback: () => void) => {
 };
 const storeValue = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* Storage may be disabled. */ } };
 
-export function Workspace({ initialClock }: { initialClock: { iso: string; tz: string } }) {
+export function Workspace({ initialClock, userId }: { userId: string; initialClock: { iso: string; tz: string } }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [keys, setKeys] = useState<Record<string, boolean>>({});
+  const [searchProvider, setSearchProvider] = useState<"tavily" | "exa">("tavily");
   const [clock, setClock] = useState(initialClock);
   const [sessions, setSessions] = useState<HistorySession[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(() => pathname.startsWith("/chat/") ? pathname.split("/")[2] : null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [revision, setRevision] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -29,6 +37,7 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   const [cursor, setCursor] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [selection, setSelection] = useState<ModelSelection>();
+  const [answerDetail, setAnswerDetail] = useState<AnswerDetail>("auto");
   const [effort, setEffort] = useState<ResearchEffort>("medium");
   const [modelError, setModelError] = useState<string>();
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -60,17 +69,13 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       setSessions(current => mergeHistory(current, page.sessions).filter(session => !deleted.current.has(session.id)));
       setCursor(page.nextCursor);
       if (restore) {
-        try { const parsed = z.array(z.uuid()).max(100).safeParse(JSON.parse(localStorage.getItem("web-agent.pinned") ?? "[]")); if (parsed.success) setPinned(parsed.data); } catch { /* Optional storage. */ }
-        let stored: string | null = null;
-        try { const value = localStorage.getItem("web-agent.session"); if (z.uuid().safeParse(value).success) stored = value; } catch { /* Optional storage. */ }
-        const id = stored ?? page.activeSessionId;
-        setSessionId(current => current ?? id);
-        setMessages(sessionMessages(page.sessions.find(session => session.id === id)));
+        try { const parsed = z.array(z.uuid()).max(100).safeParse(JSON.parse(localStorage.getItem(`web-agent.${userId}.pinned`) ?? "[]")); if (parsed.success) setPinned(parsed.data); } catch { /* Optional storage. */ }
+
       }
     } catch {
-      if (!controller.signal.aborted) { setHistoryError("Conversation history is unavailable. Your current chat stays here."); setSessionId(current => current ?? crypto.randomUUID()); }
+      if (!controller.signal.aborted) { setHistoryError("Conversation history is unavailable. Your current chat stays here."); }
     } finally { if (!controller.signal.aborted) { setHistoryLoading(false); setHistoryLoadingMore(false); } }
-  }, []);
+  }, [userId]);
 
   const loadModels = useCallback(async () => {
     modelRequest.current?.abort();
@@ -82,13 +87,22 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       const data = modelCatalogSchema.parse(await response.json());
       if (controller.signal.aborted) return;
       setCatalog(data);
+      const keyResponse = await fetch("/api/credentials", { signal: controller.signal });
+      if (!keyResponse.ok) throw new Error("Keys unavailable");
+      const configured = await keyResponse.json() as Record<string, boolean>;
+      if (controller.signal.aborted) return;
+      setKeys(configured);
+      let preferred: string | null = null;
+      try { preferred = localStorage.getItem(`web-agent.${userId}.search`); } catch { /* Optional storage. */ }
+      setSearchProvider(preferred === "exa" && configured.exa ? "exa" : configured.tavily ? "tavily" : "exa");
       let saved: ModelSelection | undefined;
-      try { const parsed = effortSchema.safeParse(localStorage.getItem("web-agent.effort")); if (parsed.success) setEffort(parsed.data); } catch { /* Optional storage. */ }
-      try { const parsed = modelSelectionSchema.safeParse(JSON.parse(localStorage.getItem("web-agent.model") ?? "null")); if (parsed.success) saved = parsed.data; } catch { /* Optional storage. */ }
-      setSelection(current => current ?? saved ?? data.default);
+      try { const parsed = answerDetailSchema.safeParse(localStorage.getItem(`web-agent.${userId}.answer-detail`)); if (parsed.success) setAnswerDetail(parsed.data); } catch { /* Optional storage. */ }
+      try { const parsed = effortSchema.safeParse(localStorage.getItem(`web-agent.${userId}.effort`)); if (parsed.success) setEffort(parsed.data); } catch { /* Optional storage. */ }
+      try { const parsed = modelSelectionSchema.safeParse(JSON.parse(localStorage.getItem(`web-agent.${userId}.model`) ?? "null")); if (parsed.success) saved = parsed.data; } catch { /* Optional storage. */ }
+      setSelection(current => current ?? (saved && data.providers.some(provider => provider.id === saved.provider && provider.available) ? saved : undefined) ?? data.default);
     } catch { if (!controller.signal.aborted) setModelError("Model settings could not be loaded."); }
     finally { if (!controller.signal.aborted) setModelsLoading(false); }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     // Begin after mount; network responses drive state updates, with cancellation
@@ -99,11 +113,10 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
 
   function newChat() {
     if (busy || opening) return;
-    const id = crypto.randomUUID();
-    setSessionId(id); setMessages([]); setRevision(value => value + 1); storeValue("web-agent.session", id);
+    setSessionId(null); setMessages([]); setRevision(value => value + 1); router.push("/");
   }
   async function openSession(id: string) {
-    if (busy || opening || id === sessionId) return;
+    if (id === sessionId && messages.length) return;
     sessionRequest.current?.abort();
     const controller = new AbortController(); sessionRequest.current = controller;
     setOpening(true);
@@ -115,20 +128,20 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       if (controller.signal.aborted) return;
       setSessions(current => mergeHistory(current, page.sessions));
       setMessages(sessionMessages(page.sessions.find(session => session.id === id)));
-      setSessionId(id); setRevision(value => value + 1); storeValue("web-agent.session", id);
+      setSessionId(id); setRevision(value => value + 1);
     } catch { if (!controller.signal.aborted) setHistoryError("That conversation could not be opened. Please try again."); }
     finally { if (!controller.signal.aborted) setOpening(false); }
   }
   function changeModel(value: ModelSelection) {
     setSelection(value);
-    if (modelSelectionSchema.safeParse(value).success) storeValue("web-agent.model", JSON.stringify(value));
+    if (modelSelectionSchema.safeParse(value).success) storeValue(`web-agent.${userId}.model`, JSON.stringify(value));
   }
   function changeEffort(value: ResearchEffort) {
     setEffort(value);
-    storeValue("web-agent.effort", value);
+    storeValue(`web-agent.${userId}.effort`, value);
   }
   function togglePin(id: string) {
-    setPinned(current => { const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id].slice(-100); storeValue("web-agent.pinned", JSON.stringify(next)); return next; });
+    setPinned(current => { const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id].slice(-100); storeValue(`web-agent.${userId}.pinned`, JSON.stringify(next)); return next; });
   }
   async function deleteConversation() {
     if (!pendingDelete || deleting || busy || !online) return;
@@ -144,10 +157,9 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
       historyRequest.current?.abort(); setHistoryLoading(false); setHistoryLoadingMore(false);
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       setSessions(current => current.filter(session => session.id !== id));
-      setPinned(current => { const next = current.filter(item => item !== id); storeValue("web-agent.pinned", JSON.stringify(next)); return next; });
+      setPinned(current => { const next = current.filter(item => item !== id); storeValue(`web-agent.${userId}.pinned`, JSON.stringify(next)); return next; });
       if (sessionId === id) {
-        const next = crypto.randomUUID();
-        setSessionId(next); setMessages([]); setRevision(value => value + 1); storeValue("web-agent.session", next);
+        setSessionId(null); setMessages([]); setRevision(value => value + 1); router.push("/");
       }
       setPendingDelete(null);
       requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus());
@@ -156,7 +168,7 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   }
   function sent(text: string) {
     if (!sessionId) return;
-    storeValue("web-agent.session", sessionId);
+
     setSessions(current => current.some(session => session.id === sessionId) ? current : [{ id: sessionId, title: text.slice(0, 80), lastTs: clock.iso, days: [] }, ...current]);
   }
   function complete() {
@@ -166,16 +178,35 @@ export function Workspace({ initialClock }: { initialClock: { iso: string; tz: s
   const available = catalog?.providers.find(provider => provider.id === selection?.provider)?.available;
   const validSelection = modelSelectionSchema.safeParse(selection).success;
   const notice = !online ? "You’re offline. Your draft is safe here; reconnect to send it." : modelError
-    ?? (catalog ? !available ? `Add ${selection?.provider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY"} to your server environment, then restart the app.` : !validSelection ? "Enter a valid model ID." : undefined : undefined);
+    ?? (catalog ? !available ? "Add an LLM key in API keys settings." : !validSelection ? "Enter a valid model ID." : undefined : undefined);
 
-  return <AppShell sidebar={<HistorySidebar sessions={sessions} selected={sessionId} iso={clock.iso} tz={clock.tz} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} hasMore={Boolean(cursor)} disabled={busy || opening || deleting} pinned={pinned} onPin={togglePin}
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const id = pathname.startsWith("/chat/") ? pathname.split("/")[2] : null;
+      if (id === sessionId) return;
+      setRevision(value => value + 1);
+      if (id) { void openSession(id); }
+      else { sessionRequest.current?.abort(); setSessionId(null); setMessages([]); }
+    }, 0);
+    return () => clearTimeout(timer);
+  // Navigation owns conversation loading. First-send URL updates keep the active stream.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+  useEffect(() => {
+    const timer = setTimeout(() => { if (sessionId) { void openSession(sessionId); } }, 0);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function created(id: string) { setSessionId(id); window.history.pushState(null, "", `/chat/${id}`); }
+  return <AppShell sidebarFooter={<AccountMenu />} sidebar={<HistorySidebar sessions={sessions} selected={sessionId} iso={clock.iso} tz={clock.tz} loading={historyLoading} loadingMore={historyLoadingMore} error={historyError} hasMore={Boolean(cursor)} disabled={busy || opening || deleting} pinned={pinned} onPin={togglePin}
     onDelete={conversation => { setDeleteError(undefined); setPendingDelete(conversation); }}
-    onNew={newChat} onSelect={id => { void openSession(id); }} onMore={() => { if (cursor) void loadHistory(cursor); }} onRetry={() => { void loadHistory(undefined, !sessionId); }} />}>
+    onNew={newChat} onSelect={id => { router.push(`/chat/${id}`); }} onMore={() => { if (cursor) void loadHistory(cursor); }} onRetry={() => { void loadHistory(undefined, !sessionId); }} />}>
+    {(!available || !keys[searchProvider]) && !modelsLoading ? <p className="mb-2 text-sm text-muted">Connect an LLM key and a search key in <Link href="/settings/api-keys" className="underline">API keys settings</Link> to send messages.</p> : null}
     {modelError ? <button type="button" onClick={() => { void loadModels(); }} className="mb-2 w-fit rounded text-xs text-muted underline">Retry model settings</button> : null}
-    <Chat key={`${sessionId}:${revision}`} sessionId={sessionId ?? undefined} initialMessages={messages} selection={selection} catalog={catalog} onSelectionChange={changeModel}
-      clock={clock} disabled={!online || !sessionId || opening || !catalog || !available || !validSelection} notice={notice}
-      loading={opening || historyLoading && !sessionId} loadingLabel={opening ? "Opening conversation" : "Loading conversation"} modelsLoading={modelsLoading && !catalog}
-      onBusyChange={setBusy} onSent={sent} onComplete={complete} effort={effort} onEffortChange={changeEffort} />
+    <Chat key={revision} sessionId={sessionId ?? undefined} initialMessages={messages} selection={selection} catalog={catalog} onSelectionChange={changeModel}
+      clock={clock} disabled={!online || opening || !catalog || !available || !validSelection || !keys[searchProvider]} notice={notice}
+      loading={opening} loadingLabel={opening ? "Opening conversation" : "Loading conversation"} modelsLoading={modelsLoading && !catalog}
+      searchProvider={searchProvider} searchKeys={keys} onSearchProviderChange={value => { setSearchProvider(value); storeValue(`web-agent.${userId}.search`, value); }} onSession={created} onBusyChange={setBusy} onSent={sent} onComplete={complete} effort={effort} onEffortChange={changeEffort} answerDetail={answerDetail} onAnswerDetailChange={value => { setAnswerDetail(value); storeValue(`web-agent.${userId}.answer-detail`, value); }} />
     <DeleteConversationDialog conversation={pendingDelete} deleting={deleting} online={online} error={deleteError} tz={clock.tz} onConfirm={() => { void deleteConversation(); }} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </AppShell>;
 }

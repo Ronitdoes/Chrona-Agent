@@ -1,3 +1,4 @@
+import { readChatStream } from "../lib/chat-stream";
 import { createTestStore } from "./database";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
@@ -68,6 +69,23 @@ describe("chat and history backend with real Postgres and fake model", () => {
     expect(app.logger.info).toHaveBeenCalledOnce();
     expect(app.logger.info.mock.calls[0][0]).toMatchObject({ recallMs: 0, ttftMs: 0, searchCount: 0, totalMs: 0, userPersisted: true, assistantPersisted: true });
   });
+  it("passes answer detail through the API and safely streams and saves a long Unicode answer", async () => {
+    const text = `${"x".repeat(4095)}🙂${"\"\n".repeat(80_000)}`;
+    const model = new FakeModel([{ text: [text] }]);
+    const run = vi.fn((options: Parameters<typeof runAgent>[0]) => runAgent({ ...options, model }));
+    const app = harness({ run });
+    const response = await app.handler(post({ message: "Give a thorough explanation in 2000 words", answerDetail: "detailed", effort: "instant", selection: { provider: "gemini", model: "gemini-3.5-flash-lite" } }));
+    let received = "";
+    await readChatStream(response.body!, event => { if (event.type === "delta") received += event.data.text; }, new AbortController().signal);
+    expect(received).toBe(text);
+    expect(run.mock.calls[0][0]).toMatchObject({ answerDetail: "detailed", effort: "instant" });
+    expect(model.requests[0].max_tokens).toBe(65_536);
+    expect(JSON.stringify(model.requests[0].system)).toContain("saved preference is Detailed");
+    await app.flush();
+    expect((await store.historyFor(userId)).find(turn => turn.role === "assistant")?.content).toBe(text);
+    expect((await app.handler(post({ message: "Hello", answerDetail: "unlimited" }))).status).toBe(400);
+  });
+
   it("carries the selected model to answers and curation and rejects unavailable providers before saving", async () => {
     const model = new FakeModel([{ text: ["Selected provider answer."] }]);
     const run = vi.fn((options: Parameters<typeof runAgent>[0]) => runAgent({ ...options, model }));

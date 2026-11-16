@@ -1,3 +1,4 @@
+import { providerConfig } from "../account-context";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
@@ -55,7 +56,7 @@ export function createGeminiCuratorModel(apiKey: string, model: string, options:
 }
 
 export async function configuredCuratorModel(requested?: ModelSelection): Promise<CuratorModel> {
-  const { env } = await import("../env");
+  const env = await providerConfig();
   const selection = await resolveModelSelection(requested, env);
   return selection.provider === "gemini" ? createGeminiCuratorModel(env.GEMINI_API_KEY, selection.model)
     : createCuratorModel(env.ANTHROPIC_API_KEY);
