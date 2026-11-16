@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Circle, Pin, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { HistorySession } from "../lib/history";
 import { historyGroups } from "../lib/workspace";
-import { AppLogo } from "./app-logo";
 import { useSmoothScroll } from "./smooth-scrolling";
 
 export function HistorySidebar({ sessions, selected, iso, tz, loading, error, hasMore, disabled, pinned = [], onPin, onDelete, onNew, onSelect, onMore, onRetry }: {
@@ -53,6 +52,5 @@ export function HistorySidebar({ sessions, selected, iso, tz, loading, error, ha
       {hasMore ? <button type="button" onClick={onMore} disabled={loading} className="mx-2 mb-3 rounded py-2 text-xs text-muted hover:text-foreground disabled:opacity-50">Load older conversations</button> : null}
       </div>
     </nav>
-    <div className="mt-3 flex items-center gap-2.5 border-t border-border px-2 pt-4"><AppLogo size={30} /><div><p className="text-xs">Your workspace</p><p className="mt-0.5 text-[10px] text-muted">A little context goes a long way.</p></div></div>
   </>;
 }

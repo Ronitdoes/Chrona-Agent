@@ -10,6 +10,28 @@ in the [recall contract](MEMORY_RECALL.md), [architecture](ARCHITECTURE.md) and
 
 ## Current resolution status
 
+The later [collection follow-up audit](RECALL_FOLLOWUP_AUDIT.md) checked the saved
+records behind the new screenshots. It confirmed lost collection provenance and
+missing same-session context: the after-midnight message was selected but its
+subject was misrepresented. Collections now persist exact displayed sources and
+absolute scope; the single structured planner distinguishes references from new
+or all-history inventories. Summaries receive bounded earlier user context and
+must return one scalar source ID per item. The earlier shortcut/empty-collection
+behavior described in the first follow-up resolution below is superseded.
+
+The follow-up screenshot audit on 16 November 2026 identified a separate
+inventory/summary routing gap: a broad yesterday inventory used fresh pages,
+while a today summary reached topical selection and could produce a false miss.
+Broad structured list/summary plans now share the fresh user-message inventory.
+Summary synthesis validates source coverage, groups repeats and falls back to
+originals on failure. Fixed runtime prompt date examples were removed; calendar
+format examples derive from the injected clock. Regression fixtures vary year,
+timezone, leap-day and New Year boundaries rather than encoding screenshot dates.
+The follow-up change passed 590 source tests, five deterministic evaluations,
+TypeScript and lint checks. Current Windows production-build verification hits
+a Turbopack CSS-worker startup failure even outside the sandbox. Paid live-provider
+summary evaluations were added but not run.
+
 | Historical concern | Current behavior and evidence |
 |---|---|
 | Keyword-only intent and pronoun handling | Structured planning classifies history/general/mixed intent and resolves bounded references |

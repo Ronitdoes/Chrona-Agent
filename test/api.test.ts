@@ -13,6 +13,7 @@ import { curate } from "../lib/curator/curate";
 import { dateFrom } from "../lib/clock";
 import type { RecallModel, RecallPlan } from "../lib/recall/plan";
 import { threads } from "../lib/store/schema";
+import { resolveDates } from "../lib/recall/temporal";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -36,7 +37,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
       clock: () => clock, time: () => 0, trace: () => logger,
       acquire: createRequestLimit(() => 0),
       resolveSelection: async requested => requested ?? { provider: "gemini", model: "test-model" },
-      recallModel: async () => ({ plan: async () => ({ intent: "general", operation: "list", queries: [], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null }), select: vi.fn() }),
+      recallModel: async () => ({ plan: async () => ({ intent: "general", operation: "list", collection: "none", queries: [], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null }), select: vi.fn(), summarize: vi.fn() }),
       curate: async () => ({ completed: 0, failed: 0, deferred: false }),
       run: (options) => {
         const model = new FakeModel([{ text: ["A short ", "answer."] }]);
@@ -117,14 +118,150 @@ describe("chat and history backend with real Postgres and fake model", () => {
     await app.flush();
   });
 
-  const historyPlan = (overrides: Partial<RecallPlan> = {}): RecallPlan => ({ intent: "history", operation: "exists", queries: ["neon pricing"], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null, ...overrides });
+  const historyPlan = (overrides: Partial<RecallPlan> = {}): RecallPlan => ({ intent: "history", operation: "exists", collection: "none", queries: ["neon pricing"], dateText: null, scope: "all", usePreviousEvidence: false, researchQuestion: null, ...overrides });
   const historyCases = (["gemini", "anthropic"] as const).flatMap(provider => (["instant", "medium", "high"] as const).map(effort => ({ provider, effort })));
+  it.each([
+    { iso: "2026-11-15T23:19:28Z", tz: "Asia/Calcutta", topic: "Explain post credit scenes connecting the upcoming films" },
+    { iso: "2032-03-01T05:30:00Z", tz: "America/New_York", topic: "Explain the sorting algorithm tradeoffs" },
+  ])("preserves a cross-midnight summary's exact collection through follow-ups ($tz/$iso)", async ({ iso, tz, topic }) => {
+    let calendar = { ...clock, instant: dateFrom(iso), iso, tz };
+    const [today] = resolveDates("today", calendar.instant, tz);
+    const old = await store.saveTurn({ userId, sessionId: "cross-midnight", role: "user", content: topic, ts: dateFrom(today.startUtc.getTime() - 120_000), tz });
+    await store.saveTurn({ userId, sessionId: old.sessionId, role: "user", content: "Explain the latest details deeply", ts: dateFrom(today.startUtc.getTime() - 60_000), tz });
+    const continuation = await store.saveTurn({ userId, sessionId: old.sessionId, role: "user", content: "recheck again for today", ts: dateFrom(today.startUtc.getTime() + 60_000), tz });
+    for (let index = 0; index < 5; index++) await store.saveTurn({ userId, sessionId: `other-${index}`, role: "user", content: `Selected-day message ${index + 1}`, ts: dateFrom(today.startUtc.getTime() + (index + 2) * 60_000), tz });
+    await store.saveTurn({ userId: "bob", sessionId: old.sessionId, role: "user", content: "Foreign context", ts: dateFrom(today.startUtc.getTime() - 30_000), tz });
+    const plan = vi.fn<RecallModel["plan"]>()
+      .mockResolvedValueOnce(historyPlan({ operation: "summarize", collection: "new", queries: [], dateText: "today" }))
+      .mockResolvedValueOnce(historyPlan({ operation: "list", collection: "previous", queries: [], dateText: null }));
+    const summarize = vi.fn<RecallModel["summarize"]>().mockImplementation(async input => {
+      expect(input.messages).toHaveLength(6);
+      const followup = input.messages.find(row => row.id === continuation.id)!;
+      expect(followup.context?.map(row => row.content)).toEqual([topic, "Explain the latest details deeply"]);
+      expect(JSON.stringify(input)).not.toContain("Foreign context");
+      return { items: input.messages.map(row => ({ turnId: row.id, summary: row.id === continuation.id ? `Requested a fresh recheck of: ${topic}` : row.content })) };
+    });
+    const select = vi.fn(), run = vi.fn();
+    const app = harness({ clock: () => calendar, recallModel: async () => ({ plan, select, summarize }), run });
+    const first = await (await app.handler(post({ message: "Briefly recap my messages today", tz }))).text();
+    expect(first).toContain("Summary of **6**");
+    expect(first).toContain(`Requested a fresh recheck of: ${topic}`);
+    expect(first).not.toContain("Explain the latest details deeply");
+    await app.flush();
+    const reference = await store.previousRecall(userId, sessionId, { ts: dateFrom(calendar.instant.getTime() + 1), id: 99999 });
+    expect(reference?.collection?.sourceTurnIds).toHaveLength(6);
+    expect(reference?.collection?.sourceTurnIds).toContain(continuation.id);
+    expect(reference?.collection?.sourceTurnIds).not.toContain(old.id);
+    await store.saveTurn({ userId, sessionId: "later", role: "user", content: "New message after the summary", ts: calendar.instant, tz });
+    const nextInstant = dateFrom(calendar.instant.getTime() + 86_400_000);
+    calendar = { ...calendar, instant: nextInstant, iso: nextInstant.toISOString() }; // reference survives a new local day
+    const second = await (await app.handler(post({ message: "lemme know the 6 messages", tz }))).text();
+    expect(second).toContain("**6** earlier");
+    expect(second).toContain("recheck again for today");
+    expect(second).not.toContain(topic);
+    expect(second).not.toContain("New message after the summary");
+    expect(second).not.toContain("Briefly recap my messages today");
+    expect(second).not.toContain("Foreign context");
+    expect(plan.mock.calls[1][0].previousCollection).toMatchObject({ count: 6, timezone: tz });
+    expect(select).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled();
+    await app.flush();
+    expect((await store.previousRecall(userId, sessionId, { ts: dateFrom(calendar.instant.getTime() + 1), id: 99999 }))?.collection?.sourceTurnIds.sort()).toEqual(reference?.collection?.sourceTurnIds.sort());
+  });
+
+  it("keeps a literal date when the plan mistakenly chooses all history, filtering each message across session dates", async () => {
+    const local = { ...clock, instant: dateFrom("2026-11-16T03:00:00Z"), tz: "Asia/Calcutta" };
+    const boundary = resolveDates("today", local.instant, local.tz)[0].startUtc;
+    await store.saveTurn({ userId, sessionId: "started-yesterday", role: "user", content: "Yesterday topic", ts: dateFrom(boundary.getTime() - 1) });
+    await store.saveTurn({ userId, sessionId: "started-yesterday", role: "user", content: "Today continuation", ts: boundary });
+    const app = harness({ clock: () => local, recallModel: async () => ({ plan: async () => historyPlan({ operation: "list", collection: "all", queries: [], dateText: null }), select: vi.fn(), summarize: vi.fn() }) });
+    const text = await (await app.handler(post({ message: "List my messages for 16 nov", tz: local.tz }))).text();
+    expect(text).toContain("**1** earlier"); expect(text).toContain("Today continuation"); expect(text).not.toContain("Yesterday topic");
+    await app.flush();
+  });
+
+  it("does not widen legacy or deleted collection references to all history", async () => {
+    const request = await store.saveTurn({ userId, sessionId, role: "user", content: "Summarize my messages today", ts: dateFrom(clock.instant.getTime() - 2000) });
+    await store.saveTurn({ userId, sessionId, role: "assistant", content: "Summary of six messages", ts: dateFrom(clock.instant.getTime() - 1000), recall: { userTurnId: request.id, sourceTurnIds: [], historyOnly: true } });
+    const app = harness({ recallModel: async () => ({ plan: async () => historyPlan({ operation: "list", collection: "previous", queries: [] }), select: vi.fn(), summarize: vi.fn() }) });
+    const text = await (await app.handler(post({ message: "Show those six messages" }))).text();
+    expect(text).toContain("couldn't verify the exact messages"); expect(text).not.toContain("Your **");
+    await app.flush();
+  });
+  it("fails closed when a selected collection message is deleted before the follow-up", async () => {
+    await store.saveTurn({ userId, sessionId: "source-session", role: "user", content: "Selected original", ts: dateFrom(clock.instant.getTime() - 1000) });
+    const plan = vi.fn<RecallModel["plan"]>()
+      .mockResolvedValueOnce(historyPlan({ operation: "list", collection: "new", queries: [], dateText: "today" }))
+      .mockResolvedValueOnce(historyPlan({ operation: "list", collection: "previous", queries: [] }));
+    const app = harness({ recallModel: async () => ({ plan, select: vi.fn(), summarize: vi.fn() }) });
+    expect(await (await app.handler(post({ message: "List my messages today" }))).text()).toContain("Selected original");
+    await app.flush();
+    await store.deleteConversation(userId, "source-session");
+    const text = await (await app.handler(post({ message: "Show those messages again" }))).text();
+    expect(text).toContain("couldn't verify the exact messages");
+    expect(text).not.toContain("Your **");
+    await app.flush();
+  });
+  it.each([
+    { provider: "gemini" as const, instant: "2030-12-31T19:00:00Z", tz: "Asia/Calcutta" },
+    { provider: "anthropic" as const, instant: "2032-03-01T05:30:00Z", tz: "America/New_York" },
+  ])("summarizes yesterday then today's messages with $provider using the fresh local calendar", async ({ provider, instant, tz }) => {
+    const calendar = { ...clock, instant: dateFrom(instant), iso: instant, tz };
+    const [today] = resolveDates("today", calendar.instant, tz);
+    const [yesterday] = resolveDates("yesterday", calendar.instant, tz);
+    const save = (content: string, ts: Date, overrides: Partial<Parameters<Store["saveTurn"]>[0]> = {}) => store.saveTurn({ userId, sessionId, role: "user", content, ts, tz, ...overrides });
+    await save("Compare hosting plans", dateFrom(yesterday.startUtc.getTime() + 1000));
+    await save("Compare hosting plans", dateFrom(yesterday.startUtc.getTime() + 2000));
+    await save("What is today's date?", dateFrom(today.startUtc.getTime() + 1000));
+    await save("Current time?", dateFrom(today.startUtc.getTime() + 2000), { sessionId: "another-session" });
+    await save("Foreign secret", dateFrom(today.startUtc.getTime() + 3000), { userId: "bob" });
+    await save("Assistant claims are not user evidence", dateFrom(today.startUtc.getTime() + 4000), { role: "assistant" });
+    const plan = vi.fn<RecallModel["plan"]>()
+      .mockResolvedValueOnce(historyPlan({ operation: "summarize", collection: "new", queries: [], dateText: "yesterday" }))
+      .mockResolvedValueOnce(historyPlan({ operation: "summarize", collection: "new", queries: [], dateText: "today", usePreviousEvidence: true }));
+    const summarize = vi.fn<RecallModel["summarize"]>().mockImplementation(async input => {
+      return { items: input.messages.map(row => ({ summary: row.content, turnId: row.id })) };
+    });
+    const select = vi.fn(); const run = vi.fn(); const background = vi.fn();
+    const app = harness({ clock: () => calendar, recallModel: async () => ({ plan, select, summarize }), run, curate: background });
+    const first = await (await app.handler(post({ message: "what questions did i ask u yesterday summaries in short", tz, selection: { provider, model: "test-model" } }))).text();
+    expect(first).toContain(yesterday.label);
+    expect(first).toContain("Compare hosting plans (2 messages;");
+    expect(first).not.toContain("Current time?");
+    await app.flush();
+    await save("Latest follow-up", calendar.instant);
+    const second = await (await app.handler(post({ message: "can you summaries today's messages as well?", tz, selection: { provider, model: "test-model" } }))).text();
+    expect(second).toContain(today.label);
+    expect(second).toContain("What is today's date?");
+    expect(second).toContain("Current time?");
+    expect(second).toContain("Latest follow");
+    expect(second).not.toContain("Compare hosting plans (2 messages;");
+    expect(second).not.toContain("Foreign secret");
+    expect(second).not.toContain("Assistant claims");
+    expect(second).not.toContain("couldn't locate");
+    expect(second).not.toContain("event: error");
+    expect(summarize.mock.calls[1][0].messages).toHaveLength(4); // includes yesterday's inventory request, excludes this request
+    expect(select).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled();
+    await app.flush(); expect(background).not.toHaveBeenCalled();
+    expect((await store.previousRecall(userId, sessionId, { ts: dateFrom(calendar.instant.getTime() + 1), id: 9999 }))?.sourceTurnIds).toEqual([]);
+  });
+
+  it("uses complete user-only inventory for a planned list, including history questions in this session", async () => {
+    const original = await store.saveTurn({ userId, sessionId, role: "user", content: "What did I ask before?", ts: dateFrom(clock.instant.getTime() - 1000) });
+    await store.saveTurn({ userId, sessionId, role: "assistant", content: "An earlier inventory", recall: { userTurnId: original.id, sourceTurnIds: [], historyOnly: true } });
+    await store.saveTurn({ userId, sessionId: "other", role: "user", content: "Another chat", ts: dateFrom(clock.instant.getTime() - 1000) });
+    const select = vi.fn(); const summarize = vi.fn();
+    const app = harness({ recallModel: async () => ({ plan: async () => historyPlan({ operation: "list", collection: "new", queries: [], dateText: "today", scope: "session" }), select, summarize }) });
+    const text = await (await app.handler(post({ message: "Show my messages today in this chat", tz: "UTC" }))).text();
+    expect(text).toContain("What did I ask before?"); expect(text).not.toContain("Another chat");
+    expect(select).not.toHaveBeenCalled(); expect(summarize).not.toHaveBeenCalled();
+    await app.flush();
+  });
   it("handles fractional monotonic timing in the real history request path", async () => {
     let tick = 0;
     const source = await store.saveTurn({ userId, sessionId, role: "user", content: "check neon db current pricing", ts: dateFrom("2026-11-15T10:10:12Z") });
     const run = vi.fn();
     const app = harness({ time: () => { tick += 0.125; return tick; }, run,
-      recallModel: async () => ({ plan: async () => historyPlan(), select: async () => ({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] }) }),
+      recallModel: async () => ({ plan: async () => historyPlan(), select: async () => ({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] }), summarize: vi.fn() }),
     });
     const body = await (await app.handler(post({ message: "did i ask u about neon db?", effort: "instant" }))).text();
     expect(body).not.toContain("event: error");
@@ -140,7 +277,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
     const plan = vi.fn<RecallModel["plan"]>().mockResolvedValueOnce(historyPlan()).mockResolvedValueOnce(historyPlan({ operation: "when", usePreviousEvidence: true }));
     const select = vi.fn<RecallModel["select"]>().mockResolvedValue({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] });
     const run = vi.fn(); const retrieve = vi.fn(); const background = vi.fn();
-    const app = harness({ run, retrieve, curate: background, recallModel: async () => ({ plan, select }), clock: tz => ({ ...clock, tz: tz ?? "UTC" }) });
+    const app = harness({ run, retrieve, curate: background, recallModel: async () => ({ plan, select, summarize: vi.fn() }), clock: tz => ({ ...clock, tz: tz ?? "UTC" }) });
     const first = await (await app.handler(post({ message: "do you remember i asked for neon pricing yes or no?", selection: { provider, model: "test-model" }, effort, tz: "Asia/Calcutta" }))).text();
     expect(first).toContain("Yes — I found"); expect(first).toContain(source.content);
     expect(first).not.toContain("event: sources"); expect(first.match(/event: done/g)).toHaveLength(1);
@@ -159,7 +296,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
     await store.db.insert(threads).values({ userId, title: "Neon", summary: "The user asked for Neon pricing.", lastTs: clock.instant });
     await store.saveTurn({ userId, sessionId, role: "assistant", content: "You asked for Neon pricing", ts: dateFrom("2026-11-15T10:00:00Z") });
     const select = vi.fn(); const run = vi.fn(); const background = vi.fn();
-    const app = harness({ run, curate: background, recallModel: async () => ({ plan: async () => historyPlan(), select }) });
+    const app = harness({ run, curate: background, recallModel: async () => ({ plan: async () => historyPlan(), select, summarize: vi.fn() }) });
     const first = await (await app.handler(post({ message: "do you remember i asked for neon pricing yes or no?" }))).text();
     expect(first).toContain("couldn't locate an original matching message"); expect(first).not.toContain("Yes");
     await app.flush();
@@ -184,7 +321,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
     const search = vi.fn(async () => ({ queries: [{ query: "Neon pricing now", results: [{ title: "Neon pricing", url: "https://neon.com/pricing", snippet: "Current plans", published_date: null, is_official: true }] }], content: "", is_error: false, truncated: false }));
     const select = vi.fn<RecallModel["select"]>().mockResolvedValue({ status: "matched", matches: [{ turnId: source.id, quote: source.content }] });
     const background = vi.fn();
-    const app = harness({ curate: background, recallModel: async () => ({ plan: async () => historyPlan({ intent: "mixed", operation: "when", researchQuestion: "Search the web for current Neon pricing" }), select }),
+    const app = harness({ curate: background, recallModel: async () => ({ plan: async () => historyPlan({ intent: "mixed", operation: "when", researchQuestion: "Search the web for current Neon pricing" }), select, summarize: vi.fn() }),
       run: options => runAgent({ ...options, model, search }),
     });
     const body = await (await app.handler(post({ message: "When did I ask about Neon pricing, and what does it cost now?" }))).text();
@@ -196,7 +333,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
     await app.flush(); expect(background).not.toHaveBeenCalled();
   });
 
-  it.each(["gemini", "anthropic"] as const)("lists all of today's user messages across chats with %s, without model/search/curation costs", async provider => {
+  it.each(["gemini", "anthropic"] as const)("plans and lists all of today's user messages across chats with %s without answer/search/curation calls", async provider => {
     const prompts = Array.from({ length: 120 }, (_, i) => ({
       userId, sessionId: i % 2 ? "33333333-3333-4333-8333-333333333333" : sessionId,
       role: "user" as const, content: `Today's question ${i + 1}`, ts: dateFrom(clock.instant.getTime() - (121 - i) * 60_000), tz: "UTC",
@@ -208,7 +345,8 @@ describe("chat and history backend with real Postgres and fake model", () => {
     await store.saveTurn({ userId: "bob", sessionId, role: "user", content: "Foreign secret", ts: dateFrom(clock.instant.getTime() - 1000) });
     await store.saveTurn({ userId, sessionId, role: "user", content: "Yesterday only", ts: dateFrom("2026-11-14T12:00:00Z") });
     const run = vi.fn(); const retrieve = vi.fn(); const background = vi.fn();
-    const app = harness({ run, retrieve, curate: background });
+    const planner = vi.fn<RecallModel["plan"]>().mockResolvedValue(historyPlan({ operation: "list", collection: "new", queries: [], dateText: "today" }));
+    const app = harness({ run, retrieve, curate: background, recallModel: async () => ({ plan: planner, select: vi.fn(), summarize: vi.fn() }) });
     const response = await app.handler(post({ message: "what are all the questions i asked u today?", tz: "UTC",
       sessionId: "44444444-4444-4444-8444-444444444444", selection: { provider, model: "test-model" } }));
     const body = await response.text();
@@ -221,7 +359,7 @@ describe("chat and history backend with real Postgres and fake model", () => {
     expect(background).not.toHaveBeenCalled(); expect(await store.pendingCurations(userId)).toHaveLength(0);
     expect(app.logger.info.mock.calls[0][0]).toMatchObject({ answerMode: "history", searchCount: 0, assistantPersisted: true });
     await store.saveTurn({ userId, sessionId, role: "user", content: "Newest question after the first list", ts: dateFrom(clock.instant.getTime() - 500) });
-    const next = harness({ run, retrieve, curate: background });
+    const next = harness({ run, retrieve, curate: background, recallModel: async () => ({ plan: planner, select: vi.fn(), summarize: vi.fn() }) });
     const updated = await (await next.handler(post({ message: "what all questions did i ask today", tz: "UTC", selection: { provider, model: "test-model" } }))).text();
     expect(updated).toContain("Newest question after the first list");
     await next.flush();

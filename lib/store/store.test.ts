@@ -37,7 +37,7 @@ describe("store on Postgres", () => {
     await migrate(store.db);
 
     const applied = await store.db.execute<{ version: number }>(sql`SELECT version FROM web_agent_migrations`);
-    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    expect(applied.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
     expect(await store.turnsInRange("alice", instant, dateFrom("2026-11-16T00:00:00Z"))).toEqual([saved]);
   });
 

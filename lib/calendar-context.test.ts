@@ -29,4 +29,9 @@ describe("unambiguous calendar context", () => {
     expect(calendarContext({ ...clock, instant, tz: "America/New_York" }).today).toBe("2026-11-15");
     expect(calendarContext({ ...clock, instant, tz: "Pacific/Auckland" }).today).toBe("2026-11-16");
   });
+  it.each(["2029-01-01T00:30:00Z", "2032-02-29T23:30:00Z", "2040-12-31T23:30:00Z"])("derives date-format examples from the injected clock (%s)", iso => {
+    const calendar = calendarContext({ ...clock, instant: dateFrom(iso), tz: "Pacific/Auckland" });
+    expect(calendar.displayFormat).toContain(calendar.todayLabel);
+    expect(calendar.displayFormat).not.toContain("2026");
+  });
 });

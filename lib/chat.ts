@@ -4,7 +4,7 @@ import { runAgent } from "./agent/loop";
 import { sse, type AgentEvents, type SendEvent } from "./agent/events";
 import { assemble, dataBlock } from "./agent/prompt";
 import type { ModelFailure } from "./agent/errors";
-import { now, monotonicMs } from "./clock";
+import { now, monotonicMs, dateFrom } from "./clock";
 import { curate, type CurationResult, type CuratorStore } from "./curator/curate";
 import { boundEvidence } from "./curator/schema";
 import { jsonError, readJson, RequestError, timeZone } from "./http";
@@ -17,11 +17,13 @@ import type { SearchResult } from "./tools/results";
 import { createTurnTrace } from "./trace";
 import { modelSelectionSchema } from "./model-selection";
 import { resolveModelSelection } from "./model-config";
-import { historyListingRequest, loadQuestionHistory, renderQuestionHistory } from "./recall/history-list";
+import { loadQuestionHistory, renderQuestionHistoryResult, resolveHistoryRequest, type HistoryListing, type QuestionHistory } from "./recall/history-list";
 import { effortSchema, effortTimeoutMs, researchBudgetAfterRecall } from "./research-effort";
 import { configuredRecallModel } from "./recall/model";
 import { planningContext, validatePlan, type RecallPlan } from "./recall/plan";
 import { answerHistory, renderHistoryAnswer, type HistoryStore } from "./recall/history";
+import { summarizeQuestionHistory } from "./recall/history-summary";
+import { collectionSchema, loadCollection, saveCollection, type RecallCollection } from "./recall/collection";
 
 const inputSchema = z.strictObject({
   message: z.string().trim().min(1).max(20_000), sessionId: z.uuid().optional(), tz: timeZone.optional(),
@@ -74,7 +76,6 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     }
 
     const abort = new AbortController();
-    const historyListing = historyListingRequest(input.message, calendar);
     const onAbort = () => abort.abort();
     request.signal.addEventListener("abort", onAbort, { once: true });
     if (request.signal.aborted) abort.abort();
@@ -94,9 +95,10 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     let evidence: SearchResult[] = [];
     let curation: CurationResult | undefined;
     let modelFailures: ModelFailure[] = [];
-    let skipCuration = Boolean(historyListing);
-    let answerMode = historyListing ? "history" : "model";
-    let recallSourceIds: number[] | undefined = historyListing ? [] : undefined;
+    let skipCuration = false;
+    let answerMode = "model";
+    let recallSourceIds: number[] | undefined;
+    let recallCollection: RecallCollection | undefined;
     let recallTrace: Record<string, unknown> | undefined;
 
     try {
@@ -110,7 +112,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           else if (assistantText) {
             const saved = await store.saveTurn({ userId: session.userId, sessionId: session.sessionId, role: "assistant", content: assistantText, ts: assistantAt, tz: calendar.tz,
               ...(!skipCuration ? { curation: { userTurnId: user.turn.id, evidence: failure || abort.signal.aborted ? [] : boundEvidence(evidence) } } : {}),
-              ...(recallSourceIds !== undefined && !failure && !abort.signal.aborted ? { recall: { userTurnId: user.turn.id, sourceTurnIds: recallSourceIds, historyOnly: answerMode === "history" } } : {}),
+              ...(recallSourceIds !== undefined && !failure && !abort.signal.aborted ? { recall: { userTurnId: user.turn.id, sourceTurnIds: recallSourceIds, historyOnly: answerMode === "history", collection: recallCollection } } : {}),
             });
             assistantTurnId = saved.id;
             assistantPersisted = true;
@@ -177,18 +179,6 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           try {
             abort.signal.throwIfAborted();
             const recallStarted = deps.time();
-            if (historyListing) {
-              const user = await userWrite;
-              if ("failed" in user) throw new Error("User persistence failed");
-              const history = await loadQuestionHistory({ userId: session.userId, request: historyListing, before: { ts: user.turn.ts, id: user.turn.id }, signal: abort.signal }, store)
-                .finally(() => { recallMs = Math.max(0, deps.time() - recallStarted); });
-              const answer = renderQuestionHistory(history, historyListing, calendar);
-              for (let index = 0; index < answer.length; index += 4096) {
-                abort.signal.throwIfAborted();
-                send("delta", { text: answer.slice(index, index + 4096) });
-              }
-              return;
-            }
             const user = await userWrite;
             if ("failed" in user) throw new Error("User persistence failed");
             const before = { ts: user.turn.ts, id: user.turn.id };
@@ -196,7 +186,10 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
               store.historyFor(session.userId, { sessionId: session.sessionId, before, limit: 20 }),
               store.previousRecall(session.userId, session.sessionId, before),
             ]);
-            const plannerInput = { message: input.message, recent: planningContext(recent), hasPreviousEvidence: Boolean(previous?.sourceTurnIds.length), clock: { iso: calendar.iso, tz: calendar.tz } };
+            const savedCollection = collectionSchema.safeParse(previous?.collection);
+            const plannerInput = { message: input.message, recent: planningContext(recent), hasPreviousEvidence: Boolean(previous?.sourceTurnIds.length),
+              ...(savedCollection.success ? { previousCollection: { count: savedCollection.data.sourceTurnIds.length, timezone: savedCollection.data.timezone, labels: savedCollection.data.ranges.map(range => range.label), truncated: savedCollection.data.truncated } } : {}),
+              clock: { iso: calendar.iso, tz: calendar.tz } };
             const recallSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(effortTimeoutMs(input.effort, Math.max(0, deps.time() - started)))]);
             let planner: Awaited<ReturnType<typeof configuredRecallModel>>;
             let plan: RecallPlan;
@@ -211,9 +204,45 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
               send("delta", { text: "I couldn't determine the context needed to answer reliably. Please retry or name the topic and whether you mean a previous conversation." });
               return;
             }
-            recallTrace = { intent: plan.intent, operation: plan.operation, scope: plan.scope };
+            recallTrace = { intent: plan.intent, operation: plan.operation, collection: plan.collection, scope: plan.scope };
             if (plan.intent !== "general") {
               skipCuration = true; answerMode = plan.intent; recallSourceIds = [];
+              if (plan.collection !== "none" || !plan.queries.length && !plan.usePreviousEvidence && (plan.operation === "list" || plan.operation === "summarize")) {
+                const target = resolveHistoryRequest(plan, input.message, calendar, session.sessionId);
+                if (target.status === "unresolved") {
+                  recallTrace = { ...recallTrace, reason: "collection_scope_unresolved" };
+                  send("delta", { text: "Which day or conversation should I use? I couldn't verify the requested scope, so I haven't expanded the search to all history." });
+                  return;
+                }
+                let request: HistoryListing;
+                let history: QuestionHistory | undefined;
+                let boundary = before, displayClock = calendar;
+                if (target.status === "previous") {
+                  try {
+                    const restored = await loadCollection(previous?.collection, { userId: session.userId, before, signal: recallSignal }, store);
+                    request = restored.request; history = restored.history;
+                    boundary = { ts: dateFrom(restored.collection.before.ts), id: restored.collection.before.id };
+                    displayClock = { ...calendar, tz: restored.collection.timezone };
+                  } catch {
+                    abort.signal.throwIfAborted();
+                    recallTrace = { ...recallTrace, reason: "collection_reference_unavailable" };
+                    send("delta", { text: "I couldn't verify the exact messages behind that earlier list or summary. Please request the day again; I won't substitute your entire history." });
+                    return;
+                  }
+                } else request = target.request;
+                const options = { userId: session.userId, request, before: boundary, signal: recallSignal };
+                const response = plan.operation === "summarize"
+                  ? await summarizeQuestionHistory({ ...options, history, clock: displayClock, message: input.message, model: planner }, store)
+                  : renderQuestionHistoryResult(history ?? await loadQuestionHistory(options, store), request, displayClock);
+                recallCollection = saveCollection(response, request, boundary, displayClock);
+                recallMs = Math.max(0, deps.time() - recallStarted);
+                recallTrace = { ...recallTrace, reason: target.status === "previous" ? "verified_collection" : "fresh_user_inventory",
+                  ranges: request.ranges.map(range => ({ startUtc: range.startUtc.toISOString(), endUtc: range.endUtc.toISOString(), label: range.label })),
+                  collectionSourceIds: response.sourceTurnIds, truncated: response.truncated };
+                abort.signal.throwIfAborted();
+                for (let index = 0; index < response.text.length; index += 4096) send("delta", { text: response.text.slice(index, index + 4096) });
+                return;
+              }
               const history = await answerHistory({ userId: session.userId, sessionId: session.sessionId, message: input.message, before, clock: calendar, plan, model: planner, signal: recallSignal }, store);
               recallMs = Math.max(0, deps.time() - recallStarted);
               const historyText = renderHistoryAnswer(history, plan, calendar);

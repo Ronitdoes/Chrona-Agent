@@ -48,6 +48,7 @@ export async function evaluate(scenario: Scenario, row: EvalRow, options: RunOpt
     let curatorCalls = 0;
     const sourceId = ids.get(scenario.id)!;
     const plan: RecallPlan = { intent: options.missing ? "history" : "mixed", operation: options.missing ? "list" : "revalidate",
+      collection: options.missing ? "new" : "none",
       queries: scenario.id === "Tuesday Postgres" && !options.missing ? ["Postgres hosting pricing", "Postgres hosting cost", "Postgres hosting"] : [],
       dateText: options.missing ? "2 November" : scenario.dateText, scope: "all", usePreviousEvidence: false,
       researchQuestion: options.missing ? null : `Search the web to revalidate the pricing of ${scenario.items.map(item => item.subject).join(", ")} since ${scenario.date}. Report each old and new value, verdict, dated source or verification limit.` };
@@ -64,6 +65,7 @@ export async function evaluate(scenario: Scenario, row: EvalRow, options: RunOpt
     const search = createWebSearch({ primary: provider, clock: () => evalClock, officialDomains: () => ["example.com"] });
     const planner: RecallModel = options.live?.recall ?? {
       plan: async () => plan,
+      summarize: async () => { throw new Error("Unexpected summary in revalidation eval"); },
       select: async input => {
         const selected = input.candidates.find(candidate => candidate.id === sourceId);
         return selected ? { status: "matched", matches: [{ turnId: selected.id, quote: selected.content }] } : { status: "not_found", matches: [] };
@@ -73,6 +75,7 @@ export async function evaluate(scenario: Scenario, row: EvalRow, options: RunOpt
     const measuredPlanner: RecallModel = {
       plan: async (input, signal) => { observedPlan = await planner.plan(input, signal); return observedPlan as RecallPlan; },
       select: (input, signal) => planner.select(input, signal),
+      summarize: (input, signal) => planner.summarize(input, signal),
     };
     const handler = createChatHandler({ store: async () => store, clock: () => evalClock, time: monotonicMs,
       after: task => { tasks.push(task); }, acquire: createRequestLimit(monotonicMs),

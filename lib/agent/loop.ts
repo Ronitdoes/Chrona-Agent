@@ -181,7 +181,7 @@ export async function runAgent(options: RunOptions) {
           if (!calendarRepairUsed && index + 1 < limits.maxSteps && limits.maxWallMs - elapsed() > 1000) {
             calendarRepairUsed = true;
             forceFinal = true;
-            messages.push({ role: "assistant", content: reply.content }, { role: "user", content: `Correct the previous answer before showing it. ${calendarIssue} Use only existing evidence, keep the same match identity, use dates such as 15 November 2026 and cite the supporting sources. If the dates or status cannot be reconciled, say they could not be verified. Do not search again.` });
+            messages.push({ role: "assistant", content: reply.content }, { role: "user", content: `Correct the previous answer before showing it. ${calendarIssue} Use only existing evidence, keep the same match identity, write dates as day + month name + four-digit year and cite the supporting sources. If the dates or status cannot be reconciled, say they could not be verified. Do not search again.` });
             continue;
           }
           reasons.add("response failure");

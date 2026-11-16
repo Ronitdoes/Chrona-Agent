@@ -46,6 +46,6 @@ export function calendarContext(clock: Clock) {
     timezone: clock.tz, today: today.iso, todayLabel: today.label,
     weekday: new Intl.DateTimeFormat("en-GB", { timeZone: clock.tz, weekday: "long" }).format(clock.instant),
     localTime: new Intl.DateTimeFormat("en-GB", { timeZone: clock.tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(clock.instant),
-    displayFormat: "D Month YYYY (for example, 15 November 2026)",
+    displayFormat: `D Month YYYY (for example, ${today.label})`,
   };
 }

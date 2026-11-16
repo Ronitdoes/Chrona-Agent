@@ -5,6 +5,7 @@ import type { HistoryCursor } from "../history";
 import * as schema from "./schema";
 import { claims, curations, memory, threads, turns, recallReferences } from "./schema";
 import type { SearchResult } from "../tools/results";
+import { collectionContains, collectionSchema, type RecallCollection } from "../recall/collection";
 
 export type StoreDatabase = NodePgDatabase<typeof schema>;
 export const USER_MEMORY_LOCK = 781424;
@@ -12,7 +13,7 @@ export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionI
   ts?: Date;
   tz?: string;
   curation?: { userTurnId: number; evidence: SearchResult[] };
-  recall?: { userTurnId: number; sourceTurnIds: number[]; historyOnly?: boolean };
+  recall?: { userTurnId: number; sourceTurnIds: number[]; historyOnly?: boolean; collection?: RecallCollection };
 };
 
 function scopedUser(userId: string): string {
@@ -51,13 +52,14 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
     },
 
     async userMessagesFor(userId: string, options: {
-      ranges?: { startUtc: Date; endUtc: Date }[]; before: HistoryCursor; limit?: number;
+      ranges?: { startUtc: Date; endUtc: Date }[]; before: HistoryCursor; limit?: number; sessionId?: string;
     }) {
       const limit = boundedLimit(options.limit ?? 200);
       for (const range of options.ranges ?? []) if (!(range.startUtc.getTime() < range.endUtc.getTime())) throw new RangeError("History range must have valid start < end instants");
       return db.select({ id: turns.id, userId: turns.userId, sessionId: turns.sessionId, content: turns.content, ts: turns.ts, tz: turns.tz })
         .from(turns).where(and(
           eq(turns.userId, scopedUser(userId)), eq(turns.role, "user"),
+          options.sessionId ? eq(turns.sessionId, options.sessionId) : undefined,
           options.ranges?.length ? or(...options.ranges.map(range => and(gte(turns.ts, range.startUtc), lt(turns.ts, range.endUtc)))) : undefined,
           or(lt(turns.ts, options.before.ts), and(eq(turns.ts, options.before.ts), lt(turns.id, options.before.id))),
         )).orderBy(desc(turns.ts), desc(turns.id)).limit(limit + 1);
@@ -97,10 +99,17 @@ export function createQueries(db: StoreDatabase, clock: () => Clock = now) {
             or(lt(turns.ts, user.ts), and(eq(turns.ts, user.ts), lt(turns.id, user.id))),
           )) : [];
           if (sources.length !== ids.length) throw new Error("Recall references must be owned earlier user messages");
+          if (recall.collection) {
+            const collection = collectionSchema.parse(recall.collection);
+            const boundary = Date.parse(collection.before.ts);
+            if (boundary > user.ts.getTime() || boundary === user.ts.getTime() && collection.before.id > user.id) throw new Error("Invalid collection boundary");
+            const originals = collection.sourceTurnIds.length ? await tx.select().from(turns).where(and(eq(turns.userId, input.userId), eq(turns.role, "user"), inArray(turns.id, collection.sourceTurnIds))) : [];
+            if (originals.length !== collection.sourceTurnIds.length || !originals.every(row => collectionContains(row, collection))) throw new Error("Invalid collection sources");
+          }
         }
         const [turn] = await tx.insert(turns).values(values).returning();
         if (curation) await tx.insert(curations).values({ turnId: turn.id, userTurnId: user.id, userId: input.userId, evidence: curation.evidence });
-        if (recall) await tx.insert(recallReferences).values({ answerTurnId: turn.id, requestTurnId: user.id, userId: input.userId, sourceTurnIds: [...new Set(recall.sourceTurnIds)], historyOnly: recall.historyOnly ?? true });
+        if (recall) await tx.insert(recallReferences).values({ answerTurnId: turn.id, requestTurnId: user.id, userId: input.userId, sourceTurnIds: [...new Set(recall.sourceTurnIds)], historyOnly: recall.historyOnly ?? true, collection: recall.collection ?? null });
         return turn;
       });
     },

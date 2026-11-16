@@ -14,8 +14,12 @@ const envSchema = z.object({
   EXA_API_KEY: optionalText,
   DATABASE_URL: databaseUrlSchema,
   TEST_DATABASE_URL: databaseUrlSchema.optional(),
-  DEFAULT_TZ: z.string().trim().min(1).default("Asia/Kolkata"),
-  NOW_OVERRIDE: optionalText,
+  DEFAULT_TZ: z.string().trim().min(1).refine(value => {
+    try { new Intl.DateTimeFormat("en-GB", { timeZone: value }); return true; }
+    catch { return false; }
+  }, "DEFAULT_TZ must be a valid timezone").default("Asia/Kolkata"),
+  NOW_OVERRIDE: optionalText.refine(value => !value || z.iso.datetime({ offset: true }).safeParse(value).success,
+    "NOW_OVERRIDE must be a valid ISO timestamp with Z or an explicit offset"),
 }).superRefine((value, context) => {
   const key = value.MODEL_PROVIDER === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
   if (!value[key]) context.addIssue({ code: "custom", path: [key], message: `${key} is required for MODEL_PROVIDER=${value.MODEL_PROVIDER}` });

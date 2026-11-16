@@ -8,7 +8,7 @@ const positiveInteger = z.string().regex(/^[1-9]\d*$/);
 const sequenceState = z.object({ lastValue: positiveInteger, isCalled: z.boolean() }).strict();
 const snapshotSchema = z.object({
   format: z.literal(1),
-  versions: z.array(z.number().int().min(1).max(4)).min(1).refine(versions => versions.every((version, i) => version === i + 1)),
+  versions: z.array(z.number().int().min(1).max(5)).min(1).refine(versions => versions.every((version, i) => version === i + 1)),
   tables: z.partialRecord(z.enum(tables), z.object({
     columns: z.array(z.object({ name: z.string(), type: z.string() }).strict()).min(1),
     rows: z.array(z.array(z.string().nullable())),
@@ -45,7 +45,8 @@ export async function importSnapshot(db: StoreDatabase, input: unknown): Promise
         ORDER BY ordinal_position
       `);
       const expected = target.rows.filter(column => !(version < 2 && table === "threads" && column.name === "source_turn_id")
-        && !(version < 4 && table === "recall_references" && column.name === "history_only"));
+        && !(version < 4 && table === "recall_references" && column.name === "history_only")
+        && !(version < 5 && table === "recall_references" && column.name === "collection"));
       if (JSON.stringify(source.columns) !== JSON.stringify(expected)) throw new Error(`Snapshot columns do not match ${table} at version ${version}`);
       for (const row of source.rows) {
         if (row.length !== source.columns.length) throw new Error(`Invalid snapshot row in ${table}`);

@@ -5,7 +5,7 @@ import type { Store } from "./index";
 import { importSnapshot, type DatabaseSnapshot } from "./transfer";
 
 // Explicit wire fixtures: all values use PostgreSQL text, including JSON and IDs.
-function snapshot(version = 4): DatabaseSnapshot {
+function snapshot(version = 5): DatabaseSnapshot {
   const columns = (definition: string) => definition.split(" ").map(pair => {
     const [name, type] = pair.split(":"); return { name, type };
   });
@@ -29,12 +29,15 @@ function snapshot(version = 4): DatabaseSnapshot {
       curations: { columns: columns("turn_id:int8 user_turn_id:int8 user_id:text evidence:jsonb completed:timestamptz"), rows: [
         ["9007199254740994", "9007199254740993", "alice", '[{"url": "https://example.com", "snippet": "café"}]', null],
       ] },
-      recall_references: { columns: columns("answer_turn_id:int8 request_turn_id:int8 user_id:text source_turn_ids:jsonb history_only:bool"), rows: [
-        ["9007199254740994", "9007199254740993", "alice", "[9007199254740993]", "true"],
+      recall_references: { columns: columns("answer_turn_id:int8 request_turn_id:int8 user_id:text source_turn_ids:jsonb history_only:bool collection:jsonb"), rows: [
+        ["9007199254740994", "9007199254740993", "alice", "[9007199254740993]", "true", null],
       ] },
     },
     sequences: { turns: { lastValue: "9007199254741000", isCalled: true }, claims: { lastValue: "1", isCalled: false }, threads: { lastValue: "8", isCalled: false } },
   };
+  if (version < 5) {
+    data.tables.recall_references!.columns.pop(); data.tables.recall_references!.rows.forEach(row => row.pop());
+  }
   if (version < 4) {
     data.tables.recall_references!.columns.pop(); data.tables.recall_references!.rows.forEach(row => row.pop());
   }
@@ -61,10 +64,10 @@ describe("transactional database transfer", () => {
     expect((await store.db.execute(sql`SELECT count(*)::int AS count FROM turns WHERE tsv @@ websearch_to_tsquery('english', 'CRM')`)).rows[0]).toEqual({ count: 1 });
   });
 
-  it.each([1, 2, 3])("imports version %i into the current schema with new defaults", async version => {
+  it.each([1, 2, 3, 4])("imports version %i into the current schema with new defaults", async version => {
     store = await createTestStore();
     await importSnapshot(store.db, snapshot(version));
-    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    expect((await store.db.execute(sql`SELECT version FROM web_agent_migrations ORDER BY version`)).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
     if (version === 3) expect((await store.db.execute(sql`SELECT history_only FROM recall_references`)).rows[0]).toEqual({ history_only: true });
   });
 

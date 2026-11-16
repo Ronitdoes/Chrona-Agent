@@ -291,7 +291,7 @@ export function resolveDates(
   text: string,
   nowInstant: Date,
   tz: string,
-  mode: "recall" | "event" = "recall",
+  mode: "recall" | "event" | "collection" = "recall",
 ): DateRange[] {
   assertTimeZone(tz);
   if (!Number.isFinite(nowInstant.getTime())) {
@@ -309,12 +309,17 @@ export function resolveDates(
   const candidates: Candidate[] = [];
 
   for (const result of results) {
+    // In a collection follow-up, "show them now" is not a new day constraint.
+    if (mode === "collection" && result.tags().has("casualReference/now")) continue;
     if (isLastWeek(result)) {
       candidates.push({
         ...lastWeekRange(today, tz),
         sortIndex: result.index,
       });
       continue;
+    }
+    if (mode === "collection" && (result.start.isCertain("hour") || result.end)) {
+      throw new Error("Sub-day and arbitrary interval collection scopes require clarification");
     }
 
     const year = result.start.get("year");

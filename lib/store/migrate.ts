@@ -78,6 +78,9 @@ const migrations = [{
   statements: [
     `ALTER TABLE recall_references ADD COLUMN history_only boolean NOT NULL DEFAULT true`,
   ],
+}, {
+  version: 5,
+  statements: [`ALTER TABLE recall_references ADD COLUMN collection jsonb`],
 }];
 
 export async function migrate(db: StoreDatabase): Promise<void> {

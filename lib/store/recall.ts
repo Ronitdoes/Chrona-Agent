@@ -30,7 +30,7 @@ export function createRecallQueries(db: StoreDatabase) {
       )).orderBy(desc(turns.ts), desc(turns.id)).limit(options.limit + 1);
     },
     async historySources(userId: string, ids: number[], boundary: HistoryCursor) {
-      if (ids.length > 10 || ids.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error("Invalid history references");
+      if (ids.length > 1000 || ids.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error("Invalid history references");
       owner(userId);
       if (!ids.length) return [];
       return db.select().from(turns).where(and(eq(turns.userId, userId), eq(turns.role, "user"), inArray(turns.id, ids), before(boundary)))

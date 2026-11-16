@@ -61,8 +61,8 @@ Request routing has three distinct paths:
 
 | Path | Retrieval and generation |
 |---|---|
-| Unqualified message inventory | Owned user-message pages and deterministic local rendering; no inference, web search or curation |
-| History-only | Structured intent/reference plan, original user-message candidates, semantic selection, deterministic evidence checks and stored quote/timestamp rendering |
+| Message inventory | Structured collection plan, owned user-message pages and deterministic local rendering; no answer generation, web search or curation |
+| History-only | Structured plan; inventories read fresh user-message pages, summaries use bounded tool-free grouping, topical recall uses semantic selection and checked quotes/timestamps |
 | General or mixed research | General context recall or verified historical baselines, followed by the answer loop and the single web-search tool |
 
 Mixed requests render private-history facts from records and send the external
@@ -70,6 +70,19 @@ subquestion to research. The generated external answer is buffered before the
 combined text is emitted. History and mixed answers skip curation. General
 research can stream model text as it arrives; live sports answers use a separate
 buffered date/status review path.
+
+All requests use one structured interpretation path. Collection mode separates
+new date/session scopes, previous exact collections and explicit all-history
+requests. Current dates are resolved independently of the plan so omissions never
+silently remove a filter. Broad inventories bypass topical selection; each
+message's own timestamp determines its day, independently of session creation.
+Summaries produce one item per selected message with bounded earlier same-session
+user context, including across midnight. Context does not enter selected-day
+counts. Exact displayed source IDs and absolute scope persist atomically in
+`recall_references.collection`. Follow-ups rehydrate that set; missing/deleted
+provenance requires a new request. Selected/context originals are re-read after
+synthesis. Dates, times, counts, ownership and scope remain in plain functions
+and SQL; the answer model still sees only `web_search`.
 
 The request registers `after()` while the Next request context is active. That
 task waits for stream completion, saves the exact emitted assistant text and
@@ -162,7 +175,7 @@ pages and opens a new chat when the active conversation is deleted.
 Local Postgres 18 runs on localhost port 5432 with a named volume. The separate
 test service uses port 5433 and disposable storage. Tests allocate uniquely named
 databases only on that test service. No embedded fallback exists. The snapshot
-importer verifies saved schema-version 1–4 data before committing it to an empty
+importer verifies saved schema-version 1–5 data before committing it to an empty
 target; local cutover backups and exports remain in ignored `data/`.
 
 ## Search, inference and extraction

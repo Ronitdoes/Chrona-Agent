@@ -23,9 +23,8 @@ server. Node instrumentation waits for storage initialization before requests.
 flowchart TD
   UI[Chat UI] --> API[Node API: validate request and anonymous identity]
   API --> Save[Persist user message]
-  API --> Inventory{Deterministic message inventory?}
-  Inventory -->|Yes| List[Read owned user messages and render locally]
-  Inventory -->|No| Plan[Structured intent and reference planning]
+  API --> Plan[Structured intent and reference planning]
+  Plan --> List[Read bounded new or exact previous collection]
   Plan --> History[Scoped history retrieval and evidence validation]
   History --> Private[Render original quotes and stored timestamps]
   Plan --> Research[Handwritten research loop]
@@ -55,10 +54,26 @@ local application.
 
 ## Semantic interpretation with deterministic history evidence
 
-Unqualified message inventories use a dedicated query and renderer. Other
-requests use structured planning to classify `general`, `history` or `mixed`
+All requests use structured planning to classify `general`, `history` or `mixed`
 intent, select a history operation and resolve references from bounded recent
 context. Planning exposes no tools and adds inference cost to ordinary requests.
+
+Collection intent distinguishes new date/session bounds, exact previous
+collections and explicit all-history requests. There is no separate regex intent
+shortcut. Current explicit dates are checked in code; an unresolved reference or
+missing date never grants an unrestricted history query. Topical selection is inappropriate for these
+requests: it excludes recall questions as evidence, while an inventory must
+include them. Summaries use bounded structured inference, one item per selected
+message, with earlier same-session user context to explain continuations across
+midnight. Context never contributes to selected-day counts. Code validates source
+coverage, rechecks selected/context originals and renders timestamps/counts.
+Identical originals with identical summaries can be grouped. Failed summaries return original messages. This
+preserves available history while accepting that paraphrase quality still
+depends on a model. Exact displayed IDs, absolute scope and the original cutoff
+persist separately from topical antecedents. Follow-ups preserve the collection;
+missing/deleted provenance requires a fresh day request. A new model-facing
+recall tool would add planning freedom without solving provenance or calendar
+correctness, so the application keeps those guarantees in its executor.
 
 History questions search original user messages first. A model selects semantic
 matches; application code checks ownership, chronology, candidate IDs, exact
@@ -80,8 +95,8 @@ History-only recall requests are excluded from later topical searches to avoid
 self-confirmation. Mixed requests remain candidates because they can contain a
 genuine new external question.
 
-History-only answers render stored quotes and local timestamps without web search
-or free-form answer synthesis. Mixed answers compose a validated history section
+History-only answers render stored quotes and local timestamps without web search;
+message summaries use the bounded structured grouping above. Mixed answers compose a validated history section
 with external research and provide bounded original baseline text for
 revalidation. Generated mixed-answer text is buffered until research completes.
 Both paths skip curation so generated recollections cannot become new durable

@@ -80,7 +80,7 @@ export async function answerHistory(options: {
       return result(turns.length > 1 && plan.operation === "when" ? "ambiguous" : "matched", "verified_antecedent", turns.map(turn => ({ turn, quote: turn.content.slice(0, 2000) })), context);
     }
     const query = historySearchQuery(plan.queries);
-    if (!query && !coverage.ranges.length && plan.operation !== "list") return result("unresolved", "topic_not_resolved");
+    if (!query && !coverage.ranges.length) return result("unresolved", "topic_not_resolved");
     let cursor = options.before;
     const matches = new Map<number, HistoryEvidence>();
     const context = new Map<number, Turn[]>();
@@ -144,7 +144,7 @@ function literal(text: string): string {
 /** All displayed facts come from validated original records, never generated prose. */
 export function renderHistoryAnswer(answer: HistoryAnswer, plan: RecallPlan, clock: Clock): string {
   if (answer.status === "unresolved") return answer.reason.startsWith("date_")
-    ? "Which calendar date do you mean? Please use a date such as 15 November 2026."
+    ? "Which calendar date do you mean? Please use a day, month name and four-digit year."
     : "I don't have a verified earlier message to attach that reference to. Which topic or conversation do you mean?";
   if (answer.status === "unavailable") return "I couldn't verify the original saved message, so I can't reliably confirm the request or give its time.";
   const scope = answer.coverage.scope === "session" ? "this conversation" : "your saved conversations";
