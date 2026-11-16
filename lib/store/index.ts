@@ -41,7 +41,7 @@ export function getStore(): Promise<Store> {
   if (readyStore) return readyStore;
   const reused = Boolean(shared.webAgentStore);
   const connection = shared.webAgentStore ??= import("../env")
-    .then(({ env }) => createStore({ databaseUrl: env.DATABASE_URL }));
+    .then(({ env }) => createStore({ databaseUrl: env.DATABASE_URL_POOLED ?? env.DATABASE_URL }));
   void connection.catch(() => {
     if (shared.webAgentStore === connection) shared.webAgentStore = undefined;
   });

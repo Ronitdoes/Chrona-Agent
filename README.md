@@ -86,7 +86,8 @@ Answer generation receives additional time independently of the search limits.
 Brief adds up to 30 seconds, Auto adds up to 120 seconds, and Detailed adds up to
 240 seconds to the final-answer reserve and total request deadline. These are
 maximum allowances. An ordinary short response returns as soon as it completes.
-The Node chat route permits up to 360 seconds. Hosting must support that duration.
+The Node chat route permits up to 300 seconds (the Vercel Hobby function limit).
+Hosting must support that duration.
 
 `gemini-3.5-flash-lite` requests use its documented 65,536-token output ceiling,
 and Gemini counts thought tokens against that same ceiling. Other model IDs use
@@ -144,7 +145,8 @@ application configuration with Zod.
 | `BETTER_AUTH_URL` | App origin, default `http://localhost:3000` |
 | `BETTER_AUTH_SECRET` | Required authentication secret, at least 32 characters |
 | `API_KEY_ENCRYPTION_KEY` | Required independent 32-byte hex key |
-| `DATABASE_URL` | Required PostgreSQL URL; use the example for local Docker |
+| `DATABASE_URL` | Required PostgreSQL URL; use the example for local Docker, the direct endpoint on a hosted database |
+| `DATABASE_URL_POOLED` | Optional pooler endpoint (e.g. Neon pooler) used for runtime connections; falls back to `DATABASE_URL` |
 | `TEST_DATABASE_URL` | Test service URL; the harness defaults to the isolated local service and rejects unsafe overrides |
 | `DEFAULT_TZ` | Timezone fallback; default `Asia/Kolkata` |
 | `NOW_OVERRIDE` | Evaluation calendar override: ISO timestamp with `Z` or an explicit offset |

@@ -240,8 +240,9 @@ search effort as a proxy for answer length.
 Generation gets an additional final-only reserve of 30 seconds for Brief,
 120 seconds for Auto or 240 seconds for Detailed. Adding the same allowance to
 the total deadline preserves the research deadline. Preparation time is still
-subtracted. The route's maximum duration is 360 seconds, while the largest normal
-request allowance is 330 seconds.
+subtracted. The route's maximum duration is 300 seconds (the Vercel Hobby
+function limit), while the largest normal request allowance is 330 seconds;
+the hosting limit therefore governs the practical ceiling on Hobby.
 
 Google documents a 65,536-token output limit for `gemini-3.5-flash-lite`, which is
 the ceiling sent for this model. Gemini counts thought tokens against that same

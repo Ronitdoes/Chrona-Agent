@@ -26,6 +26,12 @@ describe("provider configuration", () => {
     expect(loadEnv(source).DATABASE_URL).toBe("postgres://user@localhost/test");
     expect(() => loadEnv({ ...source, TEST_DATABASE_URL: "invalid" })).toThrow("TEST_DATABASE_URL");
   });
+  it("validates and trims the optional pooled database URL", () => {
+    const source = { DATABASE_URL: "postgresql://test@localhost/test" };
+    expect(loadEnv(source).DATABASE_URL_POOLED).toBeUndefined();
+    expect(loadEnv({ ...source, DATABASE_URL_POOLED: " postgres://user@pooler/test " }).DATABASE_URL_POOLED).toBe("postgres://user@pooler/test");
+    expect(() => loadEnv({ ...source, DATABASE_URL_POOLED: "invalid" })).toThrow("DATABASE_URL_POOLED");
+  });
   it("supports Google AI Studio without other provider keys", () => {
     const config = loadEnv({ DATABASE_URL: "postgresql://test@localhost/test", MODEL_PROVIDER: "gemini", GEMINI_API_KEY: "test-key", TAVILY_API_KEY: "test-key" });
     expect(config.GEMINI_MODEL).toBe("gemini-3.5-flash-lite");

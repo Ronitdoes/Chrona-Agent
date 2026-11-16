@@ -146,7 +146,10 @@ separate.
 ## Storage and lifecycle
 
 The only database driver is Drizzle node-postgres over `pg.Pool`. `DATABASE_URL`
-is required. Node instrumentation awaits automatic migration readiness, and
+is required. When `DATABASE_URL_POOLED` is set (e.g. a Neon pooler endpoint), the
+runtime pool uses it instead, keeping serverless connections bounded; the direct
+`DATABASE_URL` remains available for administrative use. Node instrumentation
+awaits automatic migration readiness, and
 development reloads reuse the pool while applying newly pending migrations and
 rebinding query methods. The startup connection timeout is bounded and failures
 are sanitized.
@@ -194,7 +197,7 @@ ceiling and extra final-answer reserve, separate from effort's search quotas.
 The exact Gemini 3.5 Flash-Lite model has a 65,536-token ceiling, including
 thought tokens, and other model IDs use 8,192. The provider stream has a bounded
 allowance for large responses, and server SSE splits answer text into Unicode-safe
-chunks. The chat route allows up to 360 seconds. A direct answer beginning in a
+chunks. The chat route allows up to 300 seconds. A direct answer beginning in a
 tools-enabled turn uses the answer deadline once text starts, preventing a
 research deadline from cutting off and regenerating already-streamed prose.
 Structured history/recall evidence contracts retain their existing bounds.

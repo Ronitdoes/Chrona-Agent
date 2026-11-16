@@ -8,7 +8,8 @@ import { accountConfig } from "../../../lib/credentials";
 import { readJson, jsonError } from "../../../lib/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 360;
+// Vercel Hobby caps serverless functions at 300 seconds.
+export const maxDuration = 300;
 export const POST = privateApi(async (request, userId) => {
   const body = await readJson(request.clone());
   const parsed = z

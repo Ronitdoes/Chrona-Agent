@@ -16,6 +16,8 @@ const envSchema = z.object({
   API_KEY_ENCRYPTION_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/, "Use a 32-byte hex encryption key"),
   EXA_API_KEY: optionalText,
   DATABASE_URL: databaseUrlSchema,
+  // Pooled endpoint (e.g. Neon pooler) used for runtime connections when set.
+  DATABASE_URL_POOLED: databaseUrlSchema.optional(),
   TEST_DATABASE_URL: databaseUrlSchema.optional(),
   DEFAULT_TZ: z.string().trim().min(1).refine(value => {
     try { new Intl.DateTimeFormat("en-GB", { timeZone: value }); return true; }

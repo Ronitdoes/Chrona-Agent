@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono, Source_Serif_4 } from "next/font/google";
 import { themeScript } from "../lib/theme";
 import { SmoothScrolling } from "../components/smooth-scrolling";
@@ -37,10 +38,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${sourceSerif.variable} h-full antialiased`}
     >
-      <head>
-        <script id="theme-initializer" dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
-      <body className="min-h-full flex flex-col"><SmoothScrolling />{children}</body>
+      <body className="min-h-full flex flex-col">
+        <Script id="theme-initializer" strategy="beforeInteractive">{themeScript}</Script>
+        <SmoothScrolling />{children}
+      </body>
     </html>
   );
 }
