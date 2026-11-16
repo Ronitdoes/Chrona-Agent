@@ -21,6 +21,9 @@ type Budgets = {
   resultTokens: number; outputTokens: number;
 };
 const defaults: Budgets = { maxSteps: 4, maxQueries: 10, maxWallMs: 45_000, finalReserveMs: 10_000, resultTokens: 8000, outputTokens: 2048 };
+// Gemini counts thought tokens against maxOutputTokens. Recovery still needs
+// room for a complete answer, so its ceiling is generous but bounded.
+const recoveryOutputTokens = 8_192;
 type Search = (input: unknown, options: { signal: AbortSignal; fresh?: boolean }) => Promise<WebSearchResult>;
 type RunOptions = {
   system: TextBlockParam[]; messages: MessageParam[]; send: SendEvent;
@@ -175,8 +178,9 @@ export async function runAgent(options: RunOptions) {
       steps++;
       try {
         reply = await streamStep(model, {
-          model: "claude-sonnet-5-5", max_tokens: recoveryUsed ? Math.min(limits.outputTokens, 512) : limits.outputTokens, system, messages: [...messages],
-          ...(options.effort ? { researchEffort: options.effort } : {}),
+          model: "claude-sonnet-5-5", max_tokens: recoveryUsed ? Math.min(limits.outputTokens, recoveryOutputTokens) : limits.outputTokens, system, messages: [...messages],
+          // Recovery uses the text-only low-thinking path so thought tokens do not consume its answer budget.
+          ...(options.effort && !recoveryUsed ? { researchEffort: options.effort } : {}),
           tools: [webSearchTool], tool_choice: final ? { type: "none" }
             : index === 0 && requireSearch ? { type: "tool", name: "web_search", disable_parallel_tool_use: true }
               : { type: "auto", disable_parallel_tool_use: true },
@@ -220,7 +224,7 @@ export async function runAgent(options: RunOptions) {
         if (reply.stop_reason === "max_tokens" || reply.stop_reason === "model_context_window_exceeded") {
           reasons.add("output limit"); emit("error", { message: "The answer reached its output limit." });
         }
-        if (recoveryUsed && answerCompleted) append("\n\nA provider interruption limited this response to a short recovery answer.");
+        if (recoveryUsed && answerCompleted) append("\n\nA provider interruption occurred; this answer was recovered from the search results already collected.");
         break;
       }
       if (liveLookup && !final) for (const block of reply.content) if (block.type === "text" && block.text) append(`${text ? "\n\n" : ""}${block.text}`);

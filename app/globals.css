@@ -109,7 +109,8 @@
   .assistant-prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .assistant-prose :where(ul, ol) { padding-inline-start: 1.5em; }
   .assistant-prose ul { list-style: disc; }
-  .assistant-prose ol { list-style: decimal; }
+  /* Leave room for three-digit markers so "100." is not clipped. */
+  .assistant-prose ol { padding-inline-start: 3em; list-style: decimal; }
   .assistant-prose blockquote { padding-inline-start: 1em; border-inline-start: 2px solid var(--border); color: var(--text-2); }
   .assistant-prose code { padding: 0.15em 0.35em; border-radius: 5px; background: var(--surface-2); font-family: var(--font-mono); font-size: 0.82em; }
   .assistant-prose pre { overflow-x: auto; padding: 1em; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); line-height: 1.6; }

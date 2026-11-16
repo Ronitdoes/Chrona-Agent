@@ -73,14 +73,26 @@ describe("post-search answer recovery", () => {
     expect(app.events.filter(({ event }) => event === "error")).toHaveLength(0);
     expect(app.events.filter(({ event }) => event === "done")).toHaveLength(1);
     const body = JSON.parse(app.fetch.mock.calls[2][1]?.body as string);
-    expect(body).toMatchObject({ generationConfig: { maxOutputTokens: 512 } });
-    expect(result.text).toContain("short recovery answer");
+    expect(body).toMatchObject({ generationConfig: { maxOutputTokens: 8_192, thinkingConfig: { thinkingLevel: "low" } } });
+    expect(result.text).toContain("recovered from the search results already collected");
     expect(body.tools).toBeUndefined();
     expect(body.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
     expect(body.contents.at(-1).parts[0].text).toContain("100/2");
     expect(JSON.stringify(body.systemInstruction)).toContain("already_shown");
     expect(JSON.stringify(body.systemInstruction)).toContain("Never invent a live score");
     expect(JSON.stringify([result, app.events, body])).not.toContain("secret");
+  });
+
+  it("does not let high-effort thinking consume the recovery answer budget", async () => {
+    const app = setup(unavailable());
+    const result = await runAgent({ ...app.options, effort: "high", selection: { provider: "gemini", model: "gemini-3.5-flash-lite" } });
+    expect(app.fetch).toHaveBeenCalledTimes(3);
+    expect(app.search).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(app.fetch.mock.calls[2][1]?.body as string);
+    expect(body).toMatchObject({ generationConfig: { maxOutputTokens: 8_192, thinkingConfig: { thinkingLevel: "low" } } });
+    expect(result.text).toContain("100/2");
+    expect(result.limits).not.toContain("output limit");
+    expect(app.events.filter(({ event }) => event === "error")).toHaveLength(0);
   });
 
   it("stops after a failed recovery and preserves sources and partial text", async () => {

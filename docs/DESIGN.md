@@ -244,11 +244,14 @@ subtracted. The route's maximum duration is 360 seconds, while the largest norma
 request allowance is 330 seconds.
 
 Google documents a 65,536-token output limit for `gemini-3.5-flash-lite`, which is
-the ceiling sent for this model. Other model IDs use 8,192 tokens. These are
-allowances rather than desired response lengths. Final correction preserves the
-selected detail. Provider-failure recovery stays short and bounded. Streamed
-partial answers and explicit limit errors preserve the result if generation ends
-early. [Google model documentation](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite)
+the ceiling sent for this model. Gemini counts thought tokens against that same
+ceiling. Other model IDs use 8,192 tokens. These are allowances rather than
+desired response lengths. Final correction preserves the selected detail.
+Provider-failure recovery uses a separate 8,192-token allowance and lowered
+thinking so its cap cannot be consumed before answer text. Streamed partial
+answers and explicit limit errors preserve the result if generation ends early.
+[Google model documentation](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite)
+[Gemini thinking token limits](https://ai.google.dev/gemini-api/docs/generate-content/thinking#token-limits)
 
 
 Planning and evidence selection consume the same request time budget but are

@@ -88,11 +88,13 @@ Brief adds up to 30 seconds, Auto adds up to 120 seconds, and Detailed adds up t
 maximum allowances. An ordinary short response returns as soon as it completes.
 The Node chat route permits up to 360 seconds. Hosting must support that duration.
 
-`gemini-3.5-flash-lite` requests use its documented 65,536-token output ceiling.
-Other model IDs use a conservative 8,192-token allowance. Prompt instructions
-control actual answer length within this ceiling. Long output is streamed in
-Unicode-safe chunks, and token/time exhaustion is reported with partial text
-preserved. A provider-failure recovery remains a bounded short response.
+`gemini-3.5-flash-lite` requests use its documented 65,536-token output ceiling,
+and Gemini counts thought tokens against that same ceiling. Other model IDs use
+a conservative 8,192-token allowance. Prompt instructions control actual answer
+length within this ceiling. Long output is streamed in Unicode-safe chunks, and
+token/time exhaustion is reported with partial text preserved. A provider-failure
+recovery uses a bounded 8,192-token allowance with reduced thinking, so thought
+tokens cannot consume the recovery answer before its text is written.
 
 These are limits, not promised source counts. Planning and recall share the
 research/context time budget; their inference calls are separate from answer-model

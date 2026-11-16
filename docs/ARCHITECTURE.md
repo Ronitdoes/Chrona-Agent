@@ -191,13 +191,13 @@ or `detailed`. The workspace saves this preference under an account-specific
 browser key. The prompt makes current-request length and format instructions
 higher priority than the saved preference. Answer generation has its own output
 ceiling and extra final-answer reserve, separate from effort's search quotas.
-The exact Gemini 3.5 Flash-Lite model has a 65,536-token ceiling, and other model
-IDs use 8,192. The provider stream has a bounded allowance for large responses,
-and server SSE splits answer text into Unicode-safe chunks. The chat route
-allows up to 360 seconds. A direct answer beginning in a tools-enabled turn
-uses the answer deadline once text starts, preventing a research deadline from
-cutting off and regenerating already-streamed prose. Structured history/recall evidence contracts retain
-their existing bounds.
+The exact Gemini 3.5 Flash-Lite model has a 65,536-token ceiling, including
+thought tokens, and other model IDs use 8,192. The provider stream has a bounded
+allowance for large responses, and server SSE splits answer text into Unicode-safe
+chunks. The chat route allows up to 360 seconds. A direct answer beginning in a
+tools-enabled turn uses the answer deadline once text starts, preventing a
+research deadline from cutting off and regenerating already-streamed prose.
+Structured history/recall evidence contracts retain their existing bounds.
 
 The answer loop caps calls, queries, sources, context and elapsed time.
 Within the model-call budget, research leaves room for final synthesis and one
@@ -208,8 +208,10 @@ Gemini final synthesis omits tool declarations and explicitly sets native
 function-calling mode to `NONE`. Planning,
 recall and synthesis share the request's time budget. Final/recovery calls disable
 additional tools. A bounded recoverable failure may synthesize from existing
-results without repeating search. Native provider errors are categorized and
-sanitized. Search content is untrusted data, not instructions. See the
+results without repeating search; recovery uses an 8,192-token allowance and
+lowered thinking so thought tokens cannot consume the answer budget. Native
+provider errors are categorized and sanitized. Search content is untrusted data,
+not instructions. See the
 [design budget table](DESIGN.md#batched-search-and-bounded-inference).
 
 Live-score requests bypass the application cache and retrieve fresh page content.
