@@ -18,7 +18,7 @@ export function decodeCursor(raw: string): HistoryCursor {
   } catch { throw new Error("Invalid history cursor"); }
 }
 
-export type HistoryTurn = Pick<Turn, "id" | "role" | "content" | "tz"> & { ts: string; answerUi?: import("./answer-blocks").RichAnswerV1 };
+export type HistoryTurn = Pick<Turn, "id" | "role" | "content" | "tz"> & { ts: string; answerUi?: import("./answer-blocks").RichAnswer };
 export type HistorySession = { id: string; title: string; lastTs: string; days: { date: string; turns: HistoryTurn[] }[] };
 
 /** Groups a page into sessions, then local calendar days; no clock reads or I/O. */

@@ -1,5 +1,6 @@
 import { answerDetailSchema } from "./answer-detail";
 import { randomUUID } from "node:crypto";
+import pTimeout from "p-timeout";
 import { z } from "zod";
 import { runAgent } from "./agent/loop";
 import { sse, textChunks, type AgentEvents, type SendEvent } from "./agent/events";
@@ -87,7 +88,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
     let closed = false;
     let sentDone = false;
     let assistantText = "";
-    let answerUi: import("./answer-blocks").RichAnswerV1 | undefined;
+    let answerUi: AgentEvents["answer_ui"] | undefined;
     let firstVisualMs: number | undefined;
     let snapshotBytes = 0;
     let assistantAt = calendar.instant;
@@ -168,7 +169,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           if (event === "answer_ui") {
             answerUi = data as AgentEvents["answer_ui"];
             snapshotBytes = Buffer.byteLength(JSON.stringify(answerUi), "utf8");
-            if (answerUi.images.length) firstVisualMs ??= Math.max(0, deps.time() - started);
+            if (answerUi.blocks.length) firstVisualMs ??= Math.max(0, deps.time() - started);
           }
           if (event === "delta") {
             const delta = data as AgentEvents["delta"];
@@ -195,23 +196,26 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
           try {
             abort.signal.throwIfAborted();
             const recallStarted = deps.time();
-            const user = await userWrite;
+            const preparationMs = () => effortTimeoutMs(input.effort, Math.max(0, deps.time() - started));
+            const prepare = <T>(work: Promise<T>) => input.effort === "deep"
+              ? pTimeout(work, { milliseconds: preparationMs(), signal: abort.signal }) : work;
+            const user = await prepare(userWrite);
             if ("failed" in user) throw new Error("User persistence failed");
             const before = { ts: user.turn.ts, id: user.turn.id };
-            const [recent, previous] = await Promise.all([
+            const [recent, previous] = await prepare(Promise.all([
               store.historyFor(session.userId, { sessionId: session.sessionId, before, limit: 20 }),
               store.previousRecall(session.userId, session.sessionId, before),
-            ]);
+            ]));
             const savedCollection = collectionSchema.safeParse(previous?.collection);
             const plannerInput = { message: input.message, recent: planningContext(recent), hasPreviousEvidence: Boolean(previous?.sourceTurnIds.length),
               ...(savedCollection.success ? { previousCollection: { count: savedCollection.data.sourceTurnIds.length, timezone: savedCollection.data.timezone, labels: savedCollection.data.ranges.map(range => range.label), truncated: savedCollection.data.truncated } } : {}),
               clock: { iso: calendar.iso, tz: calendar.tz } };
-            const recallSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(effortTimeoutMs(input.effort, Math.max(0, deps.time() - started)))]);
+            const recallSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(preparationMs())]);
             let planner: Awaited<ReturnType<typeof configuredRecallModel>>;
             let plan: RecallPlan;
             try {
-              planner = await deps.recallModel(selection);
-              plan = validatePlan(await planner.plan(plannerInput, recallSignal), plannerInput);
+              planner = await prepare(deps.recallModel(selection));
+              plan = validatePlan(await prepare(planner.plan(plannerInput, recallSignal)), plannerInput);
             } catch {
               abort.signal.throwIfAborted();
               skipCuration = true; answerMode = "recall_unavailable"; recallSourceIds = [];
@@ -259,7 +263,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
                 send("delta", { text: response.text });
                 return;
               }
-              const history = await answerHistory({ userId: session.userId, sessionId: session.sessionId, message: input.message, before, clock: calendar, plan, model: planner, signal: recallSignal }, store);
+              const history = await prepare(answerHistory({ userId: session.userId, sessionId: session.sessionId, message: input.message, before, clock: calendar, plan, model: planner, signal: recallSignal }, store));
               recallMs = Math.max(0, deps.time() - recallStarted);
               const historyText = renderHistoryAnswer(history, plan, calendar);
               if (history.status === "matched") recallSourceIds = history.matches.map(match => match.turn.id);
@@ -287,18 +291,16 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
               }
               const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started), input.answerDetail);
               if (!budgets) { send("delta", { text: `${historyText}\n\nThe time budget was used checking history; the current external facts remain unverified.` }); return; }
-              let externalUi: AgentEvents["answer_ui"] | undefined;
+              send("delta", { text: `${historyText}\n\n` });
               const result = await deps.run({ ...prompt, send: (event, data) => {
-                if (event === "answer_ui") externalUi = data as AgentEvents["answer_ui"];
-                else if (event !== "delta" && event !== "done") send(event, data);
-              }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
+                if (event === "answer_ui") {
+                  send("answer_ui", { ...data as AgentEvents["answer_ui"], externalStart: historyText.length + 2 });
+                } else if (event !== "done") send(event, data);
+              }, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets, contextualVisuals: true });
               searchCount = result.searchCount; evidence = result.evidence; modelFailures = result.modelFailures;
-              abort.signal.throwIfAborted();
-              send("delta", { text: `${historyText}\n\n${result.text}` });
-              if (externalUi) send("answer_ui", { ...externalUi, externalStart: historyText.length + 2 });
               return;
             }
-            const recalled = await deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore });
+            const recalled = await prepare(deps.retrieve({ userId: session.userId, text: input.message, now: calendar }, { store: recallStore }));
             recallMs = Math.max(0, deps.time() - recallStarted);
             abort.signal.throwIfAborted();
             const prompt = assemble({ clock: calendar, recall: recalled, message: input.message });
@@ -309,7 +311,7 @@ export function createChatHandler(overrides: Pick<Dependencies, "after"> & Parti
             prompt.messages.unshift(...context.map((turn) => ({ role: turn.role, content: turn.content })));
             const budgets = researchBudgetAfterRecall(input.effort, Math.max(0, deps.time() - started), input.answerDetail);
             if (!budgets) { skipCuration = true; send("delta", { text: "The time budget was used preparing context. I couldn't verify an answer; please retry." }); return; }
-            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets });
+            const result = await deps.run({ ...prompt, send, signal: abort.signal, turnId, time: deps.time, selection, effort: input.effort, answerDetail: input.answerDetail, budgets, contextualVisuals: true });
             searchCount = result.searchCount;
             evidence = result.evidence;
             modelFailures = result.modelFailures;

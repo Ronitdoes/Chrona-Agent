@@ -4,7 +4,8 @@ import type { ChatEvent } from "./chat-stream";
 export type ChatMessage = {
   id: string; role: "user" | "assistant"; content: string;
   state: "streaming" | "complete" | "stopped" | "error";
-  answerUi?: import("./answer-blocks").RichAnswerV1;
+  answerUi?: import("./answer-blocks").RichAnswer;
+  researchStage?: AgentEvents["research_phase"]["stage"];
   error?: string; sources?: Source[]; searches?: AgentEvents["status"][]; timing?: AgentEvents["done"];
 };
 export type ChatState = { messages: ChatMessage[]; activeId: string | null };
@@ -39,6 +40,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         case "delta": return { ...message, content: message.content + event.data.text };
         case "answer_ui": return { ...message, answerUi: event.data, sources: event.data.sources };
         case "sources": return { ...message, sources: event.data };
+        case "research_phase": return { ...message, researchStage: event.data.stage };
         case "status": return { ...message, searches: [...(message.searches ?? []).filter((search) => search.id !== event.data.id), event.data] };
         case "error": return { ...message, state: "error", error: event.data.message };
         case "done": return { ...message, state: message.state === "streaming" ? "complete" : message.state, timing: event.data };

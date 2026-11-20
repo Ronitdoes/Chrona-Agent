@@ -225,6 +225,12 @@ work, and terminal output remains explicit about unavailable evidence.
 | Instant | 2 | 2 | 3 | 30 s | 8 s |
 | Medium | 5 | 5 | 4 | 45 s | 10 s |
 | High | 10 | 10 | 4 | 90 s | 15 s |
+| Deep | 20 | 20 | 7 | 180 s | 105 s |
+
+Deep allows five search rounds. A compact per-query record links results to
+retained source IDs and records the verification focus for follow-up queries.
+Staged source admission leaves room for later evidence. After a follow-up with
+no new or improved evidence, the loop synthesizes the available findings.
 
 Search provider, answer detail and research effort use compact segmented rows
 in one popup. All options fit without internal scrolling. Supporting descriptions
@@ -237,12 +243,10 @@ requested point with relevant background, reasoning, examples and citations.
 Explicit current-request instructions override the preference. This avoids using
 search effort as a proxy for answer length.
 
-Generation gets an additional final-only reserve of 30 seconds for Brief,
-120 seconds for Auto or 240 seconds for Detailed. Adding the same allowance to
-the total deadline preserves the research deadline. Preparation time is still
-subtracted. The route's maximum duration is 300 seconds (the Vercel Hobby
-function limit), while the largest normal request allowance is 330 seconds;
-the hosting limit therefore governs the practical ceiling on Hobby.
+Instant, Medium and High extend the final reserve up to 30 seconds for Brief,
+120 for Auto or 240 for Detailed. Deep has a fixed final deadline independent
+of answer detail. All requests end generation by 285 seconds to leave a margin
+within the 300-second route limit. Preparation consumes the same request budget.
 
 Google documents a 65,536-token output limit for `gemini-3.5-flash-lite`, which is
 the ceiling sent for this model. Gemini counts thought tokens against that same
@@ -413,6 +417,12 @@ actual provider and fallback per query. The model exposes only `web_search`.
 
 Citations follow first source admission, allowing streamed prose and reopened chats to use the same numbering. Descriptive Markdown links retain their text and gain a numbered reference when their canonical destination matches a retrieved page. The source footer uses the same numbers.
 
-A versioned companion snapshot keeps the Markdown transcript usable for copying and recall. Full replacement events make duplicate stream delivery idempotent. Invalid saved presentation falls back to the transcript. One gallery holds up to four cards, one per source, appending cards without reordering those already visible. Reserved image space and publisher-link fallbacks keep failures readable.
+A versioned companion snapshot keeps the Markdown transcript usable for copying
+and recall. Full replacements make duplicate delivery idempotent, and invalid
+saved presentation falls back to the transcript. Figures use parsed Markdown
+anchors and retain citation order as they appear after the prose streams.
 
-Images from Tavily and Exa display after HTTPS URL validation and duplicate filtering, associated with publishing pages admitted as evidence. Searches request images by default, and the model can explicitly disable images for text-only research. Publisher links provide attribution, and alt text uses page-provided text when available with a source-title fallback. The first release uses existing search requests and a lead gallery. Diagrams and section-aware anchoring remain future work.
+Publisher images require a description or alt text tied to a page admitted as
+evidence. HTTPS validation, duplicate filtering and linked publisher credit
+apply before display. Native SVG limits figures to a small typed vocabulary
+and lets the transcript stream independently of figure generation.

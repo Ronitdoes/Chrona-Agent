@@ -60,7 +60,7 @@ describe("hand-written agent loop", () => {
     expect(options.events.filter(event => event.event === "done")).toHaveLength(1);
   });
 
-  it.each(effortSchema.options)("enforces %s effort across all query batches and model-visible sources", async effort => {
+  it.each(effortSchema.options.filter(effort => effort !== "deep"))("enforces %s effort across all query batches and model-visible sources", async effort => {
     const profile = effortProfiles[effort];
     const model = new FakeModel([
       { tools: [{ input: { queries: Array.from({ length: 6 }, (_, i) => `Query ${i}`) } }] },
@@ -77,6 +77,42 @@ describe("hand-written agent loop", () => {
     expect(model.requests.every(request => request.researchEffort === effort)).toBe(true);
     expect(model.requests.at(-1)?.tool_choice).toEqual({ type: "none" });
     expect(model.requests[0].max_tokens).toBe(8192);
+  });
+
+  it("caps Deep at five batches and twenty distinct queries and keeps capacity for last-round sources", async () => {
+    const model = new FakeModel([
+      ...Array.from({ length: 5 }, (_, round) => ({ tools: [{ input: { queries: [
+        ...Array.from({ length: 4 }, (_, index) => `Query ${round * 4 + index}`), " QUERY   0 ",
+      ] } }] })),
+      { text: ["Findings from five batches."] },
+    ]);
+    const search = vi.fn(async ({ queries }: { queries: string[] }) => ({ ...response([]), queries: queries.map(query => ({
+      query, results: Array.from({ length: 4 }, (_, index) => ({
+        title: `${query} source ${index}`, url: `https://example.com/${encodeURIComponent(query)}/${index}`,
+        snippet: "Fixture evidence", published_date: null, is_official: false,
+      })),
+    })) }));
+    const result = await runAgent({ ...setup(model), effort: "deep", search: input => search(input as { queries: string[] }), time: () => 0 });
+    expect(search).toHaveBeenCalledTimes(5);
+    expect(search.mock.calls.map(([{ queries }]) => queries.length)).toEqual([4, 4, 4, 4, 4]);
+    expect(result.searchCount).toBe(20);
+    expect(result.sources).toHaveLength(20);
+    expect(result.sources.some(source => source.title.startsWith("Query 16"))).toBe(true);
+    expect(model.requests[5].tool_choice).toEqual({ type: "none" });
+  });
+
+  it("ends Deep search at its deadline and still synthesizes within the same turn budget", async () => {
+    let now = 0;
+    const model = new FakeModel([{ tools: [{ input: { queries: ["Opening search"] } }] }, { text: ["Findings before the deadline."] }]);
+    const search = vi.fn(async () => {
+      now = 180_001;
+      return response(["Opening search"]);
+    });
+    const result = await runAgent({ ...setup(model), effort: "deep", search, time: () => now });
+    expect(search).toHaveBeenCalledOnce();
+    expect(model.requests[1].tool_choice).toEqual({ type: "none" });
+    expect(result.text).toContain("Findings before the deadline.");
+    expect(result.limits).toContain("time limit");
   });
 
   it("requires web_search for a live score, then restores normal routing after results", async () => {

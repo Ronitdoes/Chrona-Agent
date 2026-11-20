@@ -1,8 +1,9 @@
 import { sse, type AgentEvents, type Source } from "./agent/events";
 import type { ChatMessage } from "./chat-state";
 import { readChatStream, type ChatEvent, type requestChat } from "./chat-stream";
+import { buildRichAnswer, type RichAnswerV2 } from "./answer-blocks";
 
-export type DemoScenario = "comparison" | "no-results" | "interrupted" | "slow";
+export type DemoScenario = "comparison" | "no-results" | "interrupted" | "slow" | "visuals";
 export const demoSources: Source[] = [
   { url: "https://example.com/pricing", domain: "example.com", title: "Northstar CRM — sample pricing", publishedDate: "2026-11-14T09:00:00Z", isOfficial: true },
   { url: "https://example.org/releases", domain: "example.org", title: "Orbit Sales — sample release notes", publishedDate: "2026-11-13T12:00:00Z", isOfficial: false },
@@ -25,12 +26,45 @@ export const demoAnswer = `I compared the sample shortlist with its earlier base
 
 The distinction matters: a missing announcement is not evidence that a price stayed the same.`;
 
+const visualAnswer = `### Monthly seat prices
+
+In the sample comparison, Orbit costs $15 per seat/month and Northstar costs $23 per seat/month. See the [Northstar sample](https://example.com/pricing) and [Orbit sample](https://example.org/releases).
+
+### How the seat count affects the total
+
+A billing system multiplies the seat price by the billable seat count to calculate the monthly charge.`;
+
+const visualSnapshot: RichAnswerV2 = {
+  ...buildRichAnswer(demoSources, {}),
+  version: 2,
+  blocks: [{
+    id: "v1", kind: "chart", style: "bar", anchor: "a0", title: "Sample monthly prices per seat",
+    unit: "USD per seat/month", period: "November 2026", points: [
+      { label: "Orbit", value: 15, citation: { sourceId: "s2", quote: "In November 2026 Orbit charges 15 USD per seat/month." } },
+      { label: "Northstar", value: 23, citation: { sourceId: "s1", quote: "In November 2026 Northstar charges 23 USD per seat/month." } },
+    ],
+  }],
+};
+
 export const demoMessages: ChatMessage[] = [
   { id: "demo-u", role: "user", state: "complete", content: "Has anything changed in our CRM shortlist since Monday?" },
   { id: "demo-a", role: "assistant", state: "complete", content: demoAnswer, searches: demoSearches, sources: demoSources },
 ];
 
 export function demoEvents(scenario: DemoScenario): ChatEvent[] {
+  if (scenario === "visuals") return [
+    { type: "research_phase", data: { stage: "searching" } },
+    ...demoSearches.flatMap((search, index): ChatEvent[] => [
+      ...(index ? [{ type: "research_phase" as const, data: { stage: "checking" as const } }] : []),
+      { type: "status", data: { ...search, state: "running", count: 0 } },
+      { type: "status", data: { ...search, sources: [demoSources[index]] } },
+    ]),
+    { type: "research_phase", data: { stage: "writing" } },
+    ...Array.from(visualAnswer.matchAll(/[\s\S]{1,45}/g), ([text]): ChatEvent => ({ type: "delta", data: { text } })),
+    { type: "research_phase", data: { stage: "visuals" } },
+    { type: "answer_ui", data: visualSnapshot },
+    { type: "done", data: { turnId: "demo-visuals", ttftMs: 1800, totalMs: 2450 } },
+  ];
   const running: AgentEvents["status"] = { id: "demo-search", kind: "search", queries: demoSearches.flatMap((search) => search.queries), state: "running", count: 0 };
   const events: ChatEvent[] = [{ type: "status", data: running }];
   if (scenario === "interrupted") return [...events,

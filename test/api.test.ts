@@ -16,6 +16,14 @@ import { dateFrom } from "../lib/clock";
 import type { RecallModel, RecallPlan } from "../lib/recall/plan";
 import { threads } from "../lib/store/schema";
 import { resolveDates } from "../lib/recall/temporal";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AnswerBody } from "../components/answer-body";
+import { groupHistory } from "../lib/history";
+import { sessionMessages } from "../lib/workspace";
+import type { SearchResult } from "../lib/tools/results";
+import type { ImageCandidates } from "../lib/tools/webSearch";
+import type { ChatEvent } from "../lib/chat-stream";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -82,6 +90,105 @@ describe("chat and history backend with real Postgres and fake model", () => {
     await app.flush();
     expect((await store.historyFor(userId))[0].answerUi).toEqual(answerUi);
     expect(app.logger.info.mock.calls[0][0]).toMatchObject({ snapshotBytes: Buffer.byteLength(JSON.stringify(answerUi)), ttftMs: 0 });
+  });
+
+  it.each([true, false])("uses Deep follow-ups to check conflicting evidence (primary source available: %s)", async primaryAvailable => {
+    const source = (url: string, snippet: string, is_official = false): SearchResult =>
+      ({ title: url, url, snippet, is_official, published_date: null });
+    const first = [source("https://example.com/estimate", "Sample 2025 throughput is 42 requests/s."),
+      source("https://example.org/estimate", "Sample 2025 throughput is 58 requests/s.")];
+    const primary = source("https://example.net/measurement", "The methodology confirms 42 requests/s in 2025. The 58 figure was a peak.", true);
+    const initialQuery = "Sample 2025 throughput estimates";
+    const followUp = "Sample primary benchmark 2025 sustained versus peak";
+    const model = new FakeModel([
+      { tools: [{ input: { queries: [initialQuery] } }] },
+      { tools: [{ input: { queries: [followUp], verification_focus: "Resolve 42 versus 58 requests/s", depth: "deep", prefer_official: true } }] },
+      primaryAvailable ? { text: ["The sustained 2025 figure was 42 requests/s according to the [benchmark methodology](https://example.net/measurement)."] }
+        : { text: ["Sources report 42 and 58 requests/s. The difference remains unverified."] },
+    ]);
+    const search = vi.fn(async (input: unknown) => ({
+      queries: (input as { queries: string[] }).queries.map(query => ({ query,
+        results: query === initialQuery ? first : primaryAvailable ? [primary] : first })),
+      truncated: false, content: "", is_error: false,
+    }));
+    const app = harness({ run: options => runAgent({ ...options, model, search }) });
+    const response = await app.handler(post({ effort: "deep", answerDetail: "brief", message: "Investigate the reported sustained 2025 throughput for Sample." }));
+    const events: ChatEvent[] = [];
+    await readChatStream(response.body!, event => events.push(event), new AbortController().signal);
+    await app.flush();
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[1][0]).toMatchObject({ queries: [followUp], depth: "deep", prefer_official: true });
+    expect(JSON.stringify(model.requests[1].system)).toContain("58 requests/s");
+    expect(JSON.stringify(model.requests[1].system)).toContain("42 requests/s");
+    expect(JSON.stringify(model.requests[2].system)).toContain("Resolve 42 versus 58");
+    if (!primaryAvailable) expect(model.requests[2].tool_choice).toEqual({ type: "none" });
+    expect(events.some(event => event.type === "research_phase" && event.data.stage === "checking")).toBe(true);
+    const [saved] = await store.historyFor(userId);
+    expect(saved.content).toContain(primaryAvailable ? primary.url : "remains unverified");
+  });
+
+  const chartUrl = "https://example.net/benchmarks";
+  const imageUrl = "https://example.org/drivetrain";
+  const alphaMeasurement = "In 2025 Alpha sustained 42 requests/s.";
+  const betaMeasurement = "In 2025 Beta sustained 58 requests/s.";
+  const measurements = `${alphaMeasurement} ${betaMeasurement}`;
+  const relevant = "https://media.example.org/drivetrain.jpg";
+  const unrelated = "https://media.example.org/handlebar.jpg";
+  const fixtureSource = (url: string, title: string, snippet: string): SearchResult =>
+    ({ title, url, snippet, published_date: null, is_official: true });
+  const chart = {
+    kind: "chart", style: "bar", anchor: "a0", title: "Sustained throughput", unit: "requests/s", period: "2025",
+    points: [{ label: "Alpha", value: 42, citation: { sourceId: "s1", quote: alphaMeasurement } }, { label: "Beta", value: 58, citation: { sourceId: "s1", quote: betaMeasurement } }],
+  };
+  it.each([
+    {
+      name: "conceptual flow", question: "How does a bicycle drivetrain work?", query: "",
+      answer: "The pedals turn the chainring, which pulls the chain.\n\nGearing changes how this motion feels.",
+      blocks: [{ kind: "flow", anchor: "a0", title: "How the drivetrain transfers motion", nodes: ["Pedals", "Chainring", "Chain"],
+        edges: [{ from: 0, to: 1 }, { from: 1, to: 2 }] }],
+      expected: "How the drivetrain transfers motion", before: "Gearing changes", sources: [], images: {},
+    },
+    {
+      name: "measured chart", question: "Compare measured Alpha and Beta throughput with a chart.", query: "Alpha Beta 2025 measured sustained throughput",
+      answer: `### Results\n\n[Measurements](${chartUrl}) show that Beta was faster.\n\n### Method\n\nBoth used the same setup.`,
+      blocks: [{ ...chart, title: "Invalid percentage", unit: "%" }, chart],
+      expected: "Sustained throughput", before: "<h3>Method", sources: [fixtureSource(chartUrl, "Benchmarks", measurements)], images: {},
+    },
+    {
+      name: "publisher image", question: "Find a publisher image that shows how the rear derailleur moves.", query: "rear derailleur shifts chain image",
+      answer: `### Rear derailleur\n\nThe [derailleur](${imageUrl}) moves the chain across the cassette.\n\n### Shifter\n\nThe cable controls the movement.`,
+      blocks: [{ kind: "image", anchor: "a0", imageId: "is1-1" }],
+      expected: relevant, before: "<h3>Shifter", sources: [fixtureSource(imageUrl, "Bicycle drivetrain", "The derailleur shifts the chain across the cassette.")],
+      images: { [imageUrl]: [{ url: unrelated, description: "A bicycle handlebar with a brake lever" }, { url: relevant, alt: "Rear derailleur and cassette showing the chain path" }] },
+    },
+  ])("streams and restores a section-anchored $name", async ({ question, query, answer, blocks, expected, before, sources, images }) => {
+    let elapsed = 0;
+    const model = new FakeModel([
+      ...(query ? [{ tools: [{ input: { queries: [query] } }], after: () => { elapsed += 10; } }] : []),
+      { text: [answer], beforeText: () => { elapsed += 20; } },
+      { text: [JSON.stringify({ blocks })], beforeText: () => { elapsed += 30; } },
+    ]);
+    const app = harness({ time: () => elapsed, run: options => runAgent({ ...options, model,
+      search: async () => ({ queries: [{ query, results: sources }], images: images as ImageCandidates, truncated: false, content: "", is_error: false }),
+    }) });
+    const response = await app.handler(post({ message: question }));
+    const events: ChatEvent[] = [];
+    await readChatStream(response.body!, event => events.push(event), new AbortController().signal);
+    await app.flush();
+    const visualAt = events.findIndex(event => event.type === "answer_ui" && event.data.version === 2);
+    expect(visualAt).toBeGreaterThan(events.findIndex(event => event.type === "delta"));
+    expect(visualAt).toBeLessThan(events.findIndex(event => event.type === "done"));
+    expect(model.requests.at(-1)?.tools).toBeUndefined();
+    expect(model.requests.at(-1)?.tool_choice).toBeUndefined();
+    const session = groupHistory(await store.historyFor(userId), "UTC")[0];
+    const restored = sessionMessages(session).find(message => message.role === "assistant")!;
+    expect(restored.answerUi).toEqual(events[visualAt].data);
+    const html = renderToStaticMarkup(createElement(AnswerBody, { content: restored.content, answerUi: restored.answerUi }));
+    expect(html).toContain(expected);
+    expect(html.indexOf(expected)).toBeLessThan(html.indexOf(before));
+    expect(html).not.toContain("Invalid percentage");
+    expect(html).not.toContain(unrelated);
+    expect(app.logger.info.mock.calls[0][0]).toMatchObject({ ttftMs: query ? 30 : 20, firstVisualMs: query ? 60 : 50, totalMs: query ? 60 : 50 });
   });
 
   it("passes answer detail through the API and safely streams and saves a long Unicode answer", async () => {

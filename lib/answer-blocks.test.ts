@@ -55,13 +55,15 @@ describe("rich answers", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       images: ["https://wrong.example.com/unrelated.jpg"],
       results: [{ title: source.title, url: source.url, content: "Scene description", highlights: ["Scene description"],
-        images: [asset.url], extras: { richImageLinks: [{ url: asset.url, alt: asset.alt }] } }],
+        images: [{ url: asset.url, description: asset.alt }], extras: { richImageLinks: [{ url: asset.url, alt: asset.alt }] } }],
     })));
     const primary = provider === "tavily" ? createTavilyProvider("fixture", fetcher) : createExaProvider("fixture", fetcher);
     const search = createWebSearch({ primary, clock: () => clock });
     const input = { queries: ["movie post credits"], include_images: true };
     const first = await search(input);
     expect(first.images?.[source.url]?.[0].url).toBe(asset.url);
+    expect(first.images?.[source.url]?.[0]).toMatchObject(provider === "tavily" ? { description: asset.alt } : { alt: asset.alt });
+    if (provider === "tavily") expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ include_image_descriptions: true });
     expect(first.content).not.toContain(asset.url);
     expect(first.content).not.toContain("images");
     expect((await search(input)).images).toEqual(first.images);

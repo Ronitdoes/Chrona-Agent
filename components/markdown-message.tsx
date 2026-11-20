@@ -5,7 +5,9 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { canonicalUrl } from "../lib/tools/results";
-import type { RichAnswerV1 } from "../lib/answer-blocks";
+import type { RichAnswer } from "../lib/answer-blocks";
+import { remarkAnswerFigures } from "../lib/answer-anchors";
+import { AnswerFigure } from "./answer-figure";
 import { remarkResearchAnnotations } from "../lib/research-annotations";
 import { AsOfChip, VerdictBadge } from "./research-badges";
 
@@ -51,10 +53,19 @@ const components: Components = {
   img: ({ alt }) => <span className="text-muted">{alt ? `[Image: ${alt}]` : "[Image]"}</span>,
 };
 
-export function MarkdownMessage({ content, answerUi }: { content: string; answerUi?: RichAnswerV1 }) {
-  const rendered: Components = { ...components, a: ({ children, href }) => {
-    const index = answerUi?.sources.findIndex(source => source.url === canonicalUrl(href ?? "")) ?? -1;
-    return <a href={href} target="_blank" rel="noopener noreferrer">{children}{index >= 0 ? <sup aria-label={`Source ${index + 1}`}> [{index + 1}]</sup> : null}</a>;
-  } };
-  return <Markdown remarkPlugins={[remarkGfm, remarkResearchAnnotations]} components={rendered} skipHtml>{content}</Markdown>;
+export function MarkdownMessage({ content, answerUi }: { content: string; answerUi?: RichAnswer }) {
+  const rich = answerUi?.version === 2 ? answerUi : undefined;
+  const rendered: Components = {
+    ...components,
+    a: ({ children, href }) => {
+      const index = answerUi?.sources.findIndex(source => source.url === canonicalUrl(href ?? "")) ?? -1;
+      return <a href={href} target="_blank" rel="noopener noreferrer">{children}{index >= 0 ? <sup aria-label={`Source ${index + 1}`}> [{index + 1}]</sup> : null}</a>;
+    },
+    div: ({ node, children, ...props }) => {
+      const id = node?.properties.dataAnswerFigure ?? node?.properties["data-answer-figure"];
+      const block = rich?.blocks.find(item => item.id === id);
+      return rich && block ? <AnswerFigure key={block.id} block={block} answer={rich} /> : <div {...props}>{children}</div>;
+    },
+  };
+  return <Markdown remarkPlugins={[remarkGfm, [remarkAnswerFigures, rich?.blocks ?? []], remarkResearchAnnotations]} components={rendered} skipHtml>{content}</Markdown>;
 }

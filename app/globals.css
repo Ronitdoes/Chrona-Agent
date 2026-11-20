@@ -119,6 +119,7 @@
   .assistant-prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
   .assistant-prose :where(th, td) { padding: 0.5em 0.75em; border-bottom: 1px solid var(--border); text-align: start; }
   .chat-scroll { overflow-anchor: none; }
+  .chat-scroll[data-reading="true"] { overflow-anchor: auto; }
   .streaming-caret { display: inline-block; width: 5px; height: 1em; margin-left: 3px; background: var(--accent); animation: caret-pulse 1s ease-in-out infinite; }
   .thinking { animation: caret-pulse 1.5s ease-in-out infinite; }
   .search-status > summary::-webkit-details-marker { display: none; }

@@ -20,7 +20,7 @@ const Message = memo(function Message({ message, localSources, onRetry }: { mess
       <div className="mb-3 flex items-center gap-2 font-sans text-xs font-medium">
         <AppLogo size={23} />Chrona
       </div>
-      <SearchStatus searches={message.searches ?? []} state={message.state} />
+      <SearchStatus searches={message.searches ?? []} state={message.state} stage={message.researchStage} />
       <div className="assistant-prose">
         {message.content || message.answerUi ? <AnswerBody content={message.content} answerUi={message.answerUi} /> : message.state === "streaming" ? <ResponseSkeleton /> : null}
         {message.state === "streaming" && message.content ? <span className="streaming-caret" aria-hidden="true" /> : null}

@@ -11,7 +11,7 @@ import { collectionContains, collectionSchema, type RecallCollection } from "../
 export type StoreDatabase = NodePgDatabase<typeof schema>;
 export const USER_MEMORY_LOCK = 781424;
 export type SaveTurnInput = Pick<typeof turns.$inferInsert, "userId" | "sessionId" | "role" | "content"> & {
-  answerUi?: import("../answer-blocks").RichAnswerV1;
+  answerUi?: import("../answer-blocks").RichAnswer;
   requireOwnedConversation?: boolean;
   ts?: Date;
   tz?: string;

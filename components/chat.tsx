@@ -122,7 +122,7 @@ export function Chat({ request = requestChat, localSources = false, initialMessa
   return (
     <div className={`relative flex min-h-0 flex-1 flex-col ${state.messages.length || loading ? "" : "justify-center"}`}>
       <div className="relative min-h-0" style={{ flex: state.messages.length || loading ? "1 1 0%" : "0 1 auto" }}>
-      <div ref={viewport} data-lenis-scroll tabIndex={loading ? -1 : 0} role="region" aria-label="Messages" aria-busy={loading} inert={loading}
+      <div ref={viewport} data-lenis-scroll data-reading={showJump} tabIndex={loading ? -1 : 0} role="region" aria-label="Messages" aria-busy={loading} inert={loading}
         className="chat-scroll h-full min-h-0 overflow-y-auto overscroll-contain" style={{ visibility: loading ? "hidden" : undefined }}
         onWheel={(event) => { if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) following.current = false; }}
         onScroll={(event) => {

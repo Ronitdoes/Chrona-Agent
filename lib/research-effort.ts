@@ -2,22 +2,31 @@ import { answerDetailProfiles, type AnswerDetail } from "./answer-detail";
 import { z } from "zod";
 import type { QueryResult } from "./tools/results";
 
-export const effortSchema = z.enum(["instant", "medium", "high"]);
+export const effortSchema = z.enum(["instant", "medium", "high", "deep"]);
 export type ResearchEffort = z.infer<typeof effortSchema>;
 
 export const effortProfiles = {
-  instant: { label: "Instant", range: "1–2", maxQueries: 2, maxSources: 2, maxSteps: 3, maxWallMs: 30_000, finalReserveMs: 8000, resultTokens: 4000, thinking: "low" },
-  medium: { label: "Medium", range: "4–5", maxQueries: 5, maxSources: 5, maxSteps: 4, maxWallMs: 45_000, finalReserveMs: 10_000, resultTokens: 8000, thinking: "medium" },
-  high: { label: "High", range: "9–10", maxQueries: 10, maxSources: 10, maxSteps: 4, maxWallMs: 90_000, finalReserveMs: 15_000, resultTokens: 16_000, thinking: "high" },
+  instant: { label: "Instant", maxQueries: 2, maxSources: 2, maxSteps: 3, maxWallMs: 30_000, finalReserveMs: 8000, resultTokens: 4000, thinking: "low" },
+  medium: { label: "Medium", maxQueries: 5, maxSources: 5, maxSteps: 4, maxWallMs: 45_000, finalReserveMs: 10_000, resultTokens: 8000, thinking: "medium" },
+  high: { label: "High", maxQueries: 10, maxSources: 10, maxSteps: 4, maxWallMs: 90_000, finalReserveMs: 15_000, resultTokens: 16_000, thinking: "high" },
+  deep: { label: "Deep", maxQueries: 20, maxSources: 20, maxSteps: 7, maxWallMs: 180_000, finalReserveMs: 105_000, resultTokens: 16_000, thinking: "high" },
 } as const;
+
+export function effortDeadlines(effort: ResearchEffort, detail?: AnswerDetail) {
+  const profile = effortProfiles[effort];
+  const extension = detail ? answerDetailProfiles[detail].extraFinalMs : 0;
+  const maxWallMs = effort === "deep" ? 285_000 : Math.min(285_000, profile.maxWallMs + extension);
+  const researchMs = effort === "deep" ? profile.maxWallMs : profile.maxWallMs - profile.finalReserveMs;
+  return { maxWallMs, finalReserveMs: maxWallMs - researchMs };
+}
 
 /** Interpretation, retrieval and synthesis share the user's chosen time budget. */
 export function researchBudgetAfterRecall(effort: ResearchEffort, elapsedMs: number, answerDetail?: AnswerDetail): { maxWallMs: number; finalReserveMs: number } | null {
   if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new Error("Invalid elapsed time");
-  const profile = effortProfiles[effort];
-  const extraFinalMs = answerDetail ? answerDetailProfiles[answerDetail].extraFinalMs : 0;
-  const maxWallMs = profile.maxWallMs + extraFinalMs - elapsedMs;
-  return maxWallMs <= 1000 ? null : { maxWallMs, finalReserveMs: Math.min(profile.finalReserveMs + extraFinalMs, maxWallMs) };
+  const deadlines = effortDeadlines(effort, answerDetail);
+  const maxWallMs = deadlines.maxWallMs - elapsedMs;
+  return (effort === "deep" && elapsedMs >= effortProfiles.deep.maxWallMs) || maxWallMs <= 1000 ? null
+    : { maxWallMs, finalReserveMs: Math.min(deadlines.finalReserveMs, maxWallMs) };
 }
 
 /** Node's AbortSignal.timeout requires integer milliseconds, while the injected
@@ -46,4 +55,14 @@ export function limitResearchSources(queries: QueryResult[], known: ReadonlySet<
     return { ...query, results };
   });
   return { queries: limited, truncated };
+}
+
+export function deepSourceLimit(round: number, remainingQueries: number, roundLimit: number) {
+  const maximum = effortProfiles.deep.maxSources;
+  const futureRounds = Math.min(remainingQueries, Math.max(0, roundLimit - round));
+  return maximum - futureRounds * 3;
+}
+
+export function queryKey(query: string) {
+  return query.trim().replace(/\s+/gu, " ").toLowerCase();
 }

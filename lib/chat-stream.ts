@@ -3,23 +3,26 @@ import type { AnswerDetail } from "./answer-detail";
 import { z } from "zod";
 import type { ModelSelection } from "./model-selection";
 import type { ResearchEffort } from "./research-effort";
+import { researchStages } from "./agent/events";
 
 const count = z.number().int().nonnegative();
+const sourceSchema = z.object({
+  url: z.string(), title: z.string(), domain: z.string(), publishedDate: z.string().nullable(), isOfficial: z.boolean(),
+});
 export const chatEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delta"), data: z.object({ text: z.string() }) }),
   z.object({ type: z.literal("status"), data: z.object({
-    id: z.string(), kind: z.literal("search"), queries: z.array(z.string()), state: z.enum(["running", "done"]), count, usage: z.array(z.object({ query: z.string(), provider: z.enum(["tavily", "exa"]), fallback: z.boolean() })).optional(),
+    id: z.string(), kind: z.literal("search"), queries: z.array(z.string()), state: z.enum(["running", "done"]), count, sources: z.array(sourceSchema).max(20).optional(), usage: z.array(z.object({ query: z.string(), provider: z.enum(["tavily", "exa"]), fallback: z.boolean() })).optional(),
   }) }),
-  z.object({ type: z.literal("sources"), data: z.array(z.object({
-    url: z.string(), title: z.string(), domain: z.string(), publishedDate: z.string().nullable(), isOfficial: z.boolean(),
-  })) }),
+  z.object({ type: z.literal("research_phase"), data: z.object({ stage: z.enum(researchStages) }) }),
+  z.object({ type: z.literal("sources"), data: z.array(sourceSchema) }),
   z.object({ type: z.literal("answer_ui"), data: richAnswerSchema }),
   z.object({ type: z.literal("done"), data: z.object({ turnId: z.string(), ttftMs: z.number().nonnegative(), totalMs: z.number().nonnegative() }) }),
   z.object({ type: z.literal("error"), data: z.object({ message: z.string() }) }),
 ]);
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 export class ChatStreamError extends Error {}
-const knownEvents = new Set(["delta", "status", "sources", "answer_ui", "done", "error"]);
+const knownEvents = new Set(["delta", "status", "research_phase", "sources", "answer_ui", "done", "error"]);
 const maxFrame = 131_072;
 
 /** Incremental SSE framing, including CRLF split across chunks and multiline data. */

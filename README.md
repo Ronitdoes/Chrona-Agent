@@ -50,8 +50,10 @@ include a production application Docker image or hosting deployment automation.
 - Private `/chat/[sessionId]` links with refresh and browser navigation.
 - Tavily/Exa selection in the effort popup, with automatic fallback to the other
   configured provider and query-level fallback status.
-- General research with source cards, search progress, streaming answers and
-  bounded recovery after provider failures.
+- Adaptive research with expandable search activity, cited streaming answers
+  and bounded recovery after provider failures.
+- Inline SVG flows, timelines and charts, plus credited publisher images.
+  Saved conversations restore each figure beside the passage it illustrates.
 - Conversation inventories rendered directly from user-message records, without
   model, web-search or curator calls.
 - Evidence-backed history questions and timestamp follow-ups using original
@@ -75,6 +77,11 @@ Research effort is remembered in the browser and can also be supplied by API:
 | Instant | 2 | 2 | 3 | 30 seconds |
 | Medium (default) | 5 | 5 | 4 | 45 seconds |
 | High | 10 | 10 | 4 | 90 seconds |
+| Deep | 20 | 20 | 7 | 180 seconds |
+
+Select **Deep** in the effort popup for a multi-part investigation. Chrona can
+make up to five search passes and keeps space for sources found during follow-up
+checks. Expand the activity panel to see the queries and sources from each batch.
 
 The effort popup also provides **Answer detail** with Auto (default), Brief and
 Detailed. The preference is saved in the browser separately for each account.
@@ -85,9 +92,10 @@ instructions about length, word count or format take precedence.
 Answer generation receives additional time independently of the search limits.
 Brief adds up to 30 seconds, Auto adds up to 120 seconds, and Detailed adds up to
 240 seconds to the final-answer reserve and total request deadline. These are
-maximum allowances. An ordinary short response returns as soon as it completes.
-The Node chat route permits up to 300 seconds (the Vercel Hobby function limit).
-Hosting must support that duration.
+maximum allowances. Deep shares a 285-second deadline across preparation,
+research, writing and figures. The other efforts also cap their deadline at
+285 seconds. The Node chat route permits up to 300 seconds, leaving time for
+completion and persistence. An ordinary short response returns as soon as it completes.
 
 `gemini-3.5-flash-lite` requests use its documented 65,536-token output ceiling,
 and Gemini counts thought tokens against that same ceiling. Other model IDs use
@@ -210,7 +218,7 @@ These are bounded regression checks, not a production accuracy benchmark.
 
 | Route | Contract |
 |---|---|
-| `POST /api/chat` | JSON `message`, required owned UUID `sessionId` and `searchProvider`; optional `tz`, `selection: { provider, model }`, and `effort`; returns SSE |
+| `POST /api/chat` | JSON `message`, required owned UUID `sessionId` and `searchProvider`. Optional `tz`, `selection`, `answerDetail` and `effort` (`instant`, `medium`, `high`, `deep`). Returns SSE. |
 | `GET /api/history` | Optional `sessionId`, `tz`, `limit` (1–200) and opaque `before` cursor; returns grouped sessions and `nextCursor` |
 | `DELETE /api/history?sessionId=<UUID>` | Confirmed, user-scoped conversation deletion; successful deletion returns 204 |
 | `GET /api/models` | Model IDs and account provider availability; never API keys |
@@ -221,12 +229,13 @@ These are bounded regression checks, not a production accuracy benchmark.
 | `/api/auth/*` | Better Auth email/password signup, sign-in, session and sign-out |
 
 Better Auth database sessions authenticate private pages and APIs. SSE
-events are `status`, `sources`, `delta`, `error` and `done`. `X-Session-Id`
+events are `research_phase`, `status`, `sources`, `answer_ui`, `delta`,
+`error` and `done`. `X-Session-Id`
 identifies the conversation; `X-Turn-Id` and `done.turnId` identify the request.
 See [runtime architecture](docs/ARCHITECTURE.md) for persistence and evidence flow.
 
-[The component demo](http://localhost:3000/demo) replays comparison, empty-result,
-interrupted-search and slow-response scenarios. Its data, sources and dates are
+[The component demo](http://localhost:3000/demo) replays comparison, inline-chart,
+empty-result, interrupted-search and slow-response scenarios. Its data, sources and dates are
 fictional; it makes no model/search requests or conversation writes.
 
 ## Documentation

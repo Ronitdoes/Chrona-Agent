@@ -85,7 +85,7 @@ export function EffortPicker({ value, disabled, onChange, searchProvider, search
         <p className={label}>Research effort</p>
         <div className={`${choices} grid-cols-3`}>
           {effortSchema.options.map(effort => <button key={effort} type="button" aria-pressed={effort === value}
-            title={`${effortProfiles[effort].range} sources, up to ${effortProfiles[effort].maxQueries} searches`}
+            title={`Up to ${effortProfiles[effort].maxQueries} queries and ${effortProfiles[effort].maxSources} sources`}
             onClick={() => { onChange(effort); setOpen(false); trigger.current?.focus(); }} className={choice}>
             {effortProfiles[effort].label}
           </button>)}

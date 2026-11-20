@@ -39,7 +39,7 @@ export function AgentDemo() {
         <div className="flex shrink-0 flex-wrap items-center gap-3 py-3 text-xs">
           <label className="flex items-center gap-2 text-muted">Scenario
             <select aria-label="Demo scenario" className="max-w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-foreground" value={scenario} onChange={(event) => { setScenario(event.target.value as DemoScenario); setReplay((value) => value + 1); }}>
-              <option value="comparison">Verified comparison</option><option value="no-results">No results</option><option value="interrupted">Interrupted search</option><option value="slow">Slow reply — try Stop</option>
+              <option value="comparison">Verified comparison</option><option value="visuals">Research with an inline chart</option><option value="no-results">No results</option><option value="interrupted">Interrupted search</option><option value="slow">Slow reply — try Stop</option>
             </select>
           </label>
           <button type="button" className="ml-auto flex items-center gap-1.5 rounded px-1 py-1 text-muted hover:text-foreground" onClick={() => setReplay((value) => value + 1)}><RotateCcw size={12} aria-hidden="true" />Reset</button>

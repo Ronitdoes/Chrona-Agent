@@ -18,7 +18,7 @@ const chunkSchema = z.object({ candidates: z.array(z.object({
 })).optional(), promptFeedback: z.object({ blockReason: z.string().optional() }).optional() });
 
 export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCall> = new Map(), model = "gemini-3.5-flash-lite") {
-  const textOnly = request.tool_choice?.type === "none";
+  const textOnly = request.tool_choice?.type === "none" || !request.tools?.length;
   const contents: Content[] = request.messages.flatMap((message: MessageParam): Content[] => {
     if (typeof message.content === "string") return [{ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] }];
     // Final synthesis is ordinary text, not another native function-calling turn.
@@ -57,7 +57,7 @@ export function geminiRequest(request: ModelRequest, saved: Map<string, SavedCal
     systemInstruction: { parts: typeof request.system === "string" ? [{ text: request.system }] : request.system?.map(block => ({ text: block.type === "text" ? block.text : "" })) ?? [] },
     contents,
     ...(!textOnly && declarations?.length ? { tools: [{ functionDeclarations: declarations }] } : {}),
-    ...(textOnly || declarations?.length ? { toolConfig: { functionCallingConfig: {
+    ...(declarations?.length ? { toolConfig: { functionCallingConfig: {
       mode: textOnly ? "NONE" : choice?.type === "tool" || choice?.type === "any" ? "ANY" : "AUTO",
       ...(choice?.type === "tool" ? { allowedFunctionNames: ["web_search"] } : {}),
     } } } : {}),

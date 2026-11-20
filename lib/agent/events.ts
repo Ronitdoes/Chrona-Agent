@@ -1,9 +1,11 @@
 export type Source = { url: string; title: string; domain: string; publishedDate: string | null; isOfficial: boolean };
+export const researchStages = ["searching", "checking", "writing", "visuals"] as const;
 export type AgentEvents = {
-  status: { id: string; kind: "search"; queries: string[]; state: "running" | "done"; count: number; usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[] };
+  status: { id: string; kind: "search"; queries: string[]; state: "running" | "done"; count: number; sources?: Source[]; usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[] };
+  research_phase: { stage: typeof researchStages[number] };
   delta: { text: string };
   sources: Source[];
-  answer_ui: import("../answer-blocks").RichAnswerV1;
+  answer_ui: import("../answer-blocks").RichAnswer;
   done: { turnId: string; ttftMs: number; totalMs: number };
   error: { message: string };
 };

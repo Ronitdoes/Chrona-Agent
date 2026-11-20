@@ -27,7 +27,7 @@ export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis
           start_date: request.since,
           include_published_date: true,
           include_answer: false,
-          ...(request.include_images ? { include_images: true } : {}),
+          ...(request.include_images ? { include_images: true, include_image_descriptions: true } : {}),
           include_raw_content: request.depth === "deep" ? "markdown" : false,
           ...(request.fresh ? { max_age_hours: 0 } : {}),
           ...(request.prefer_official && request.officialDomains.length ? {
@@ -44,7 +44,8 @@ export function createTavilyProvider(apiKey: string, fetcher: Fetch = globalThis
         url: result.url,
         published_date: result.published_date,
         snippet: result.content ?? "",
-        ...(request.include_images ? { images: (result.images ?? []).map(image => ({ url: typeof image === "string" ? image : image.url })) } : {}),
+        ...(request.include_images ? { images: (result.images ?? []).map(image => typeof image === "string" ? { url: image }
+          : { url: image.url, ...(image.description ? { description: image.description } : {}) }) } : {}),
         ...(request.depth === "deep" ? { content: result.raw_content } : {}),
       }));
     },

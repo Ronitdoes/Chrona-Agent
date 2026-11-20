@@ -45,16 +45,16 @@ describe("answer detail", () => {
           original.maxWallMs - original.finalReserveMs - 1000,
         );
         expect(budget.finalReserveMs).toBe(
-          original.finalReserveMs + answerDetailProfiles[detail].extraFinalMs,
+          Math.min(original.finalReserveMs + answerDetailProfiles[detail].extraFinalMs, 285_000 - original.maxWallMs + original.finalReserveMs),
         );
-        expect(budget.maxWallMs + 1000).toBeLessThan(360_000);
+        expect(budget.maxWallMs + 1000).toBeLessThanOrEqual(285_000);
       }
     },
   );
   it("keeps a final-answer opportunity after preparation uses the research time", () => {
     expect(researchBudgetAfterRecall("high", 100_000, "detailed")).toEqual({
-      maxWallMs: 230_000,
-      finalReserveMs: 230_000,
+      maxWallMs: 185_000,
+      finalReserveMs: 185_000,
     });
     expect(researchBudgetAfterRecall("high", 330_000, "detailed")).toBeNull();
   });

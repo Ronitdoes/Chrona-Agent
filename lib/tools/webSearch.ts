@@ -8,7 +8,7 @@ import { isLiveScoreRequest } from "../agent/search-policy";
 import { liveScoreEvidence } from "./live-results";
 import { createTavilyProvider } from "./providers/tavily";
 import { createExaProvider } from "./providers/exa";
-import type { SearchProvider, SearchRequest } from "./providers/types";
+import type { ProviderResult, SearchProvider, SearchRequest } from "./providers/types";
 import { fitBudget, normalizeResults, officialDomainsFor, wrapResults, type QueryResult, type SearchResult, type SearchPayload } from "./results";
 
 type Options = {
@@ -22,7 +22,7 @@ type Options = {
   officialDomains?: (query: string) => string[];
 };
 
-export type ImageCandidates = Record<string, { url: string; alt?: string }[]>;
+export type ImageCandidates = Record<string, NonNullable<ProviderResult["images"]>>;
 export type WebSearchResult = SearchPayload & { images?: ImageCandidates; usage?: { query: string; provider: "tavily" | "exa"; fallback: boolean }[]; is_error: boolean; content: string };
 
 export function cacheTtl(input: Pick<WebSearchInput, "topic" | "recency">): number {
@@ -81,7 +81,10 @@ export function createWebSearch(options: Options) {
         if (filters.include_images) for (const item of raw) {
           const page = canonicalUrl(item.url);
           if (!page) continue;
-          images[page] = [...(images[page] ?? []), ...(item.images ?? [])].filter(image => image.url.length <= 2048 && /^https:\/\//.test(image.url)).slice(0, 8);
+          const candidates = (item.images ?? []).filter(image => image.url.length <= 2048 && /^https:\/\//.test(image.url))
+            .map(image => ({ url: image.url, ...(image.alt ? { alt: image.alt.slice(0, 500) } : {}),
+              ...(image.description ? { description: image.description.slice(0, 500) } : {}) }));
+          images[page] = [...(images[page] ?? []), ...candidates].slice(0, 8);
         }
         if (fresh && !results.length && provider === options.primary && options.fallback) continue;
         if (fresh) for (const result of results) result.retrieved_at = clock().iso;
